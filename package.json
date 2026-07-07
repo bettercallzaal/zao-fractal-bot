@@ -4,18 +4,24 @@
   "private": true,
   "description": "ZAO Fractal Discord bot - discord.js + viem + Supabase rebuild",
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "web"
+  ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run build -w @fractalbot/shared && tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:all": "npm test -w @fractalbot/shared && npm test -w web && npm test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fractalbot/shared": "*",
     "discord.js": "14.26.4",
     "viem": "2.54.6",
     "@ordao/orclient": "latest",
