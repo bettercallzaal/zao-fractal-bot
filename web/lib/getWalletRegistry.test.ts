@@ -24,10 +24,7 @@ function makeFakeSupabase(rows: { discord_id: string; wallet_address: string }[]
             then: async (resolve: (v: unknown) => void) => {
               const needle = pattern.replace(/%/g, '').toLowerCase();
               resolve({
-                data: rows.filter(
-                  (r) =>
-                    r.discord_id.toLowerCase().includes(needle) || r.wallet_address.toLowerCase().includes(needle),
-                ),
+                data: rows.filter((r) => (r as any)[column].toLowerCase().includes(needle)),
                 error: null,
               });
             },
@@ -60,6 +57,7 @@ describe('getWalletRegistry', () => {
       { discordId: 'd2', walletAddress: '0xdef' },
     ]);
     expect(calls.order).toBeTruthy();
+    expect(calls.order?.column).toBe('discord_id');
     expect(calls.ilike).toBeNull();
   });
 
@@ -76,13 +74,13 @@ describe('getWalletRegistry', () => {
     expect(calls.order).toBeNull();
   });
 
-  it('handles case-insensitive search across discord ID', async () => {
+  it('handles case-insensitive search across wallet address', async () => {
     const { client, calls } = makeFakeSupabase([
-      { discord_id: 'Alice123', wallet_address: '0xabc' },
-      { discord_id: 'Bob456', wallet_address: '0xdef' },
+      { discord_id: 'Alice123', wallet_address: '0xABC123' },
+      { discord_id: 'Bob456', wallet_address: '0xDEF456' },
     ]);
-    const result = await getWalletRegistry(client as any, 'ALICE');
-    expect(result).toEqual([{ discordId: 'Alice123', walletAddress: '0xabc' }]);
+    const result = await getWalletRegistry(client as any, 'abc1');
+    expect(result).toEqual([{ discordId: 'Alice123', walletAddress: '0xABC123' }]);
     expect(calls.ilike?.column).toBe('wallet_address');
   });
 
