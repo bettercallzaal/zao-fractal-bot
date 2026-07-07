@@ -48,12 +48,22 @@ export async function executeCommand(
     throw insertError;
   }
 
+  let result: unknown;
   try {
-    const result = runner(params);
-    await supabase.from('bot_commands').update({ status: 'done', result, completed_at: new Date().toISOString() }).eq('id', inserted.id);
-    return { status: 'done', result };
+    result = runner(params);
   } catch (err) {
-    await supabase.from('bot_commands').update({ status: 'failed', result: { error: String(err) }, completed_at: new Date().toISOString() }).eq('id', inserted.id);
+    // Runner threw - update row with failure status
+    const { error: updateError } = await supabase.from('bot_commands').update({ status: 'failed', result: { error: String(err) }, completed_at: new Date().toISOString() }).eq('id', inserted.id);
+    if (updateError) {
+      throw new Error(`Failed to update row after execution failure: ${updateError.message}`);
+    }
     return { status: 'failed' };
   }
+
+  // Runner succeeded - update row with success status
+  const { error: updateError } = await supabase.from('bot_commands').update({ status: 'done', result, completed_at: new Date().toISOString() }).eq('id', inserted.id);
+  if (updateError) {
+    throw new Error(`Failed to update row after successful execution: ${updateError.message}`);
+  }
+  return { status: 'done', result };
 }
