@@ -7,6 +7,15 @@ import {
   collectVoicePresence,
 } from '../lib/discordPresence.js';
 import { buildRoster, type PresenceSignal, type RegistryEntry } from '../lib/rosterCapture.js';
+import { fetchFarcasterProfiles } from '../lib/farcaster.js';
+import {
+  indexIdentities,
+  type RespectMemberRow,
+  type UnifiedIdentity,
+  type UserRow,
+  unifyIdentities,
+  type WalletRow,
+} from '../lib/identityBridge.js';
 import { distributeIntoGroups } from './randomize.js';
 
 type ActionResult = { status: 'done' | 'failed' | 'already_processed'; result?: unknown };
@@ -247,6 +256,90 @@ const ACTIONS: Record<
     if (error) throw error;
 
     return { bound: data };
+  },
+
+  /** Bridge a member's identity across Discord, chain, and Farcaster. Reads
+   * respect_members (name, wallet, fid), users (discord_id, wallet, fid), and
+   * wallets (discord_id, wallet), and folds them into one record per member so
+   * the bot knows that a Discord user, an on-chain wallet, and a Farcaster fid
+   * are the same person. Optionally filter to specific `discordIds` or
+   * `wallets` (e.g. the members a roster capture just found). This is the
+   * foundation of every Farcaster<->Discord integration. Read-only. */
+  bridgeIdentities: async (params, ctx) => {
+    const [members, users, wallets] = await Promise.all([
+      ctx.supabase.from('respect_members').select('name, wallet_address, fid'),
+      ctx.supabase.from('users').select('discord_id, primary_wallet, display_name, fid'),
+      ctx.supabase.from('wallets').select('discord_id, wallet_address'),
+    ]);
+    if (members.error) throw members.error;
+    if (users.error) throw users.error;
+    if (wallets.error) throw wallets.error;
+
+    const identities = unifyIdentities({
+      respectMembers: (members.data ?? []) as RespectMemberRow[],
+      users: (users.data ?? []) as UserRow[],
+      wallets: (wallets.data ?? []) as WalletRow[],
+    });
+
+    // Optional filtering by the caller's scope.
+    const wantDiscord = params.discordIds as string[] | undefined;
+    const wantWallets = (params.wallets as string[] | undefined)?.map((w) => w.toLowerCase());
+    let filtered = identities;
+    if (wantDiscord || wantWallets) {
+      const dSet = new Set(wantDiscord ?? []);
+      const wSet = new Set(wantWallets ?? []);
+      filtered = identities.filter(
+        (id) => (id.discordId && dSet.has(id.discordId)) || wSet.has(id.wallet),
+      );
+    }
+
+    return {
+      identities: filtered,
+      counts: {
+        total: filtered.length,
+        withDiscord: filtered.filter((i) => i.discordId).length,
+        withFid: filtered.filter((i) => i.fid !== null).length,
+      },
+    };
+  },
+
+  /** Read Farcaster awareness for members: given `fids` directly, or `wallets`
+   * / `discordIds` (resolved to fids via the identity bridge), return each
+   * member's Farcaster profile (username, display name, verified addresses).
+   * Reuses ZAO's Neynar path - reads only, no bot FID needed. Read-only. */
+  resolveFarcaster: async (params, ctx) => {
+    let fids = (params.fids as number[] | undefined) ?? [];
+    const wantWallets = params.wallets as string[] | undefined;
+    const wantDiscord = params.discordIds as string[] | undefined;
+
+    // If wallets/discordIds were given, resolve them to fids via the bridge.
+    if (wantWallets || wantDiscord) {
+      const [members, users] = await Promise.all([
+        ctx.supabase.from('respect_members').select('name, wallet_address, fid'),
+        ctx.supabase.from('users').select('discord_id, primary_wallet, display_name, fid'),
+      ]);
+      if (members.error) throw members.error;
+      if (users.error) throw users.error;
+      const idx = indexIdentities(
+        unifyIdentities({
+          respectMembers: (members.data ?? []) as RespectMemberRow[],
+          users: (users.data ?? []) as UserRow[],
+        }),
+      );
+      const resolved: UnifiedIdentity[] = [];
+      for (const w of wantWallets ?? []) {
+        const hit = idx.byWallet.get(w.toLowerCase());
+        if (hit) resolved.push(hit);
+      }
+      for (const d of wantDiscord ?? []) {
+        const hit = idx.byDiscordId.get(d);
+        if (hit) resolved.push(hit);
+      }
+      fids = [...fids, ...resolved.map((r) => r.fid).filter((f): f is number => f !== null)];
+    }
+
+    const profiles = await fetchFarcasterProfiles(fids);
+    return { profiles: [...profiles.values()] };
   },
 };
 
