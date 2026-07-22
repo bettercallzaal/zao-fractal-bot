@@ -4,7 +4,7 @@ import NextAuth, { type Session } from 'next-auth';
 import type { JWT } from 'next-auth/jwt';
 import Discord from 'next-auth/providers/discord';
 import Credentials from 'next-auth/providers/credentials';
-import { verifySiweSignature } from './lib/siwe.js';
+import { verifySiweSignature, getCsrfNonce } from './lib/siwe.js';
 import { resolveMemberIdentity } from './lib/resolveMemberIdentity.js';
 import { getGuildMemberRoleIds } from './lib/getGuildMemberRoleIds.js';
 import { getCachedRoles, setCachedRoles } from './lib/guildRoleCache.js';
@@ -23,13 +23,29 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         message: { label: 'Message', type: 'text' },
         signature: { label: 'Signature', type: 'text' },
       },
-      async authorize(credentials) {
+      async authorize(credentials, request) {
         const message = credentials?.message as string | undefined;
         const signature = credentials?.signature as `0x${string}` | undefined;
         if (!message || !signature) return null;
 
-        const { address, valid } = await verifySiweSignature(message, signature);
-        if (!valid) return null;
+        // Bind the signature to this app's domain and the per-session CSRF
+        // nonce, so a signature captured elsewhere (or replayed) is rejected.
+        // SIWE_DOMAIN must be set; without it we refuse rather than fall open.
+        const domain = process.env.SIWE_DOMAIN;
+        if (!domain) {
+          console.error('SIWE_DOMAIN is not set - refusing SIWE login (see .env.example)');
+          return null;
+        }
+        const nonce = getCsrfNonce(request as unknown as Request);
+
+        const { address, valid, reason } = await verifySiweSignature(message, signature, {
+          domain,
+          nonce,
+        });
+        if (!valid) {
+          console.warn(`SIWE login rejected: ${reason ?? 'invalid'}`);
+          return null;
+        }
 
         return { id: address, walletAddress: address };
       },
