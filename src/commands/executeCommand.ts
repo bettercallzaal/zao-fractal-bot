@@ -10,6 +10,7 @@ import { buildRoster, type PresenceSignal, type RegistryEntry } from '../lib/ros
 import { fetchFarcasterProfiles } from '../lib/farcaster.js';
 import { makeOptimismClient, readOrecConfig, readProposalStatus } from '../lib/governance.js';
 import { findEntry, listTopics } from '../lib/fractalKnowledge.js';
+import { buildWelcomeMessage } from '../lib/welcome.js';
 import {
   indexIdentities,
   type RespectMemberRow,
@@ -425,6 +426,41 @@ const ACTIONS: Record<
       title: entry.title,
       body: entry.body,
       related: entry.see.map((k) => topics.find((t) => t.key === k)).filter(Boolean),
+    };
+  },
+
+  /** Personalized onboarding checklist for one member - the message that
+   * meets a newcomer with the exact steps between them and their first
+   * Respect. Message building is pure (welcome lib); this thin adapter
+   * checks the users registry so the wallet step self-marks when already
+   * done. Returns the message for the caller to deliver (channel post or
+   * DM) - the bot stays passive-record, it does not post on its own. */
+  welcome: async (params, ctx) => {
+    const displayName = (params.displayName as string | undefined)?.trim();
+    if (!displayName) {
+      throw new Error('welcome requires a `displayName`');
+    }
+    const discordId = (params.discordId as string | undefined) ?? null;
+
+    let hasWallet = false;
+    if (discordId) {
+      const { data, error } = await ctx.supabase
+        .from('users')
+        .select('primary_wallet')
+        .eq('discord_id', discordId)
+        .maybeSingle();
+      if (error) throw error;
+      hasWallet = !!data?.primary_wallet;
+    }
+
+    return {
+      displayName,
+      hasWallet,
+      message: buildWelcomeMessage({
+        displayName,
+        hasWallet,
+        hasIntro: (params.hasIntro as boolean | undefined) ?? null,
+      }),
     };
   },
 };

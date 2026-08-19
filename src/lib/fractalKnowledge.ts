@@ -108,6 +108,17 @@ export const FRACTAL_KNOWLEDGE: KnowledgeEntry[] = [
     see: ['scoring', 'game', 'roadmap'],
   },
   {
+    key: 'join',
+    title: 'How to join',
+    aliases: ['joining', 'onboard', 'onboarding', 'new member', 'get started', 'first fractal', 'participate'],
+    body: [
+      'Four steps to your first Respect: register your Optimism wallet (or ENS) with an organizer so awards mint to you, post a short intro in the intros channel, then show up - weekly fractal, Mondays 6pm ET in the fractal voice channel - and tell your circle what you contributed.',
+      'Cannot make Mondays? Log your contributions async and the circle sees them when it ranks. Sessions can also run anytime four or more members who have not played that week gather.',
+      `Full account: ${WHITEPAPER}`,
+    ].join('\n\n'),
+    see: ['fractal', 'game', 'scoring'],
+  },
+  {
     key: 'roadmap',
     title: 'What the bot does now, and what is next',
     aliases: ['ideas', 'next', 'awareness', 'plans', 'todo'],
