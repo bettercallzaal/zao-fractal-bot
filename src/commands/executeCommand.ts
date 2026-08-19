@@ -11,6 +11,13 @@ import { fetchFarcasterProfiles } from '../lib/farcaster.js';
 import { makeOptimismClient, readOrecConfig, readProposalStatus } from '../lib/governance.js';
 import { findEntry, listTopics } from '../lib/fractalKnowledge.js';
 import {
+  bucketByMember,
+  type ContributionRow,
+  DEFAULT_LOOKBACK_HOURS,
+  formatContributionDigest,
+  normalizeContribution,
+} from '../lib/contributions.js';
+import {
   indexIdentities,
   type RespectMemberRow,
   type UnifiedIdentity,
@@ -425,6 +432,88 @@ const ACTIONS: Record<
       title: entry.title,
       body: entry.body,
       related: entry.see.map((k) => topics.find((t) => t.key === k)).filter(Boolean),
+    };
+  },
+
+  /** Log a contribution outside the live call, so the circle sees async work
+   * when it ranks. Validation + link extraction is pure (contributions lib);
+   * this is the thin insert into `discord_contributions`. `displayName` is
+   * required because not every contributor has a bound users row; when a
+   * discordId IS bound, roster captures resolve identity from it later. */
+  submitContribution: async (params, ctx) => {
+    const displayName = (params.displayName as string | undefined)?.trim();
+    if (!displayName) {
+      throw new Error('submitContribution requires a `displayName`');
+    }
+    const { content, links } = normalizeContribution(params.content as string);
+    const discordId = (params.discordId as string | undefined) ?? null;
+    const meetingNumber = (params.meetingNumber as number | undefined) ?? null;
+
+    const { data, error } = await ctx.supabase
+      .from('discord_contributions')
+      .insert({
+        discord_id: discordId,
+        display_name: displayName,
+        content,
+        links,
+        meeting_number: meetingNumber,
+        source: (params.source as string | undefined) ?? 'command',
+      })
+      .select('id, created_at')
+      .single();
+    if (error) throw error;
+
+    return {
+      recorded: true,
+      id: data?.id ?? null,
+      displayName,
+      links,
+      meetingNumber,
+      message:
+        `Logged for ${displayName}` +
+        (meetingNumber ? ` (meeting ${meetingNumber})` : ' (next meeting)') +
+        ' - the circle will see it when ranking.',
+    };
+  },
+
+  /** The facilitator's view of async work: everything logged for a meeting
+   * number (plus untagged rows from the lookback window), bucketed per member
+   * with a Discord-ready digest. `markReviewed: true` stamps the returned
+   * rows so the next listing shows only new arrivals. */
+  listContributions: async (params, ctx) => {
+    const meetingNumber = (params.meetingNumber as number | undefined) ?? null;
+    const lookbackHours =
+      (params.lookbackHours as number | undefined) ?? DEFAULT_LOOKBACK_HOURS;
+    const unreviewedOnly = (params.unreviewedOnly as boolean | undefined) ?? false;
+    // Injectable clock keeps the lookback window deterministic in tests.
+    const nowMs = (params.nowMs as number | undefined) ?? Date.now();
+    const since = new Date(nowMs - lookbackHours * 3_600_000).toISOString();
+
+    let query = ctx.supabase
+      .from('discord_contributions')
+      .select('id, discord_id, display_name, content, links, meeting_number, reviewed, created_at');
+    query = meetingNumber
+      ? query.or(`meeting_number.eq.${meetingNumber},and(meeting_number.is.null,created_at.gte.${since})`)
+      : query.gte('created_at', since);
+    if (unreviewedOnly) query = query.eq('reviewed', false);
+    const { data, error } = await query;
+    if (error) throw error;
+    const rows = (data ?? []) as ContributionRow[];
+
+    if (params.markReviewed === true && rows.length > 0) {
+      const { error: updErr } = await ctx.supabase
+        .from('discord_contributions')
+        .update({ reviewed: true })
+        .in('id', rows.map((r) => r.id));
+      if (updErr) throw updErr;
+    }
+
+    const buckets = bucketByMember(rows);
+    return {
+      count: rows.length,
+      members: buckets.length,
+      buckets,
+      digest: formatContributionDigest(buckets, { meetingNumber }),
     };
   },
 };
