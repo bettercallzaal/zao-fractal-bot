@@ -19,6 +19,7 @@
     "test:watch": "vitest",
     "test:all": "npm test -w @fractalbot/shared && npm test -w web && npm test",
     "smoke": "tsx scripts/smoke.ts",
+    "verify-awards": "tsx scripts/verify-awards.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
