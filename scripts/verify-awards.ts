@@ -12,9 +12,11 @@
  *
  * The built-in list is the 2026-08-18 OneNote Fractal Todos sweep. Verified
  * 2026-08-19: all five were already minted in batch tx 0x993fd3e2... on
- * 2026-04-13, tagged 1-2 meetings below the todo list's numbers - which is
- * why the meeting-radius search exists. Penguin's wallet was recovered from
- * that tx (the only 42-Respect mint). Update the list for future batches.
+ * 2026-04-13. With the meeting = period + 1 convention (doc 2301) applied,
+ * four of five match their expected meeting exactly; Penguin's 42 sits one
+ * meeting below - which is why the radius search stays. Penguin's wallet
+ * was recovered from that tx (the only 42-Respect mint). Update the list
+ * for future batches.
  *
  * Award submission itself stays human-gated:
  * https://zao.frapps.xyz/newProposal/respectAccountBatch
@@ -26,6 +28,7 @@ import {
   type AwardHit,
   awardVerdict,
   meetingSearchRange,
+  meetingToPeriod,
   packAwardTokenId,
   type PendingAward,
 } from '../src/lib/awardVerification.js';
@@ -60,7 +63,7 @@ async function findAwardHits(
   const hits: AwardHit[] = [];
   for (const m of [...meetingSearchRange(meeting)].sort((a, b) => a - b)) {
     for (const mintType of AWARD_MINT_TYPES) {
-      const tokenId = packAwardTokenId(wallet, m, mintType);
+      const tokenId = packAwardTokenId(wallet, meetingToPeriod(m), mintType);
       const balance = await client.readContract({
         address: ZOR_RESPECT_ADDRESS,
         abi: RESPECT1155_ABI,

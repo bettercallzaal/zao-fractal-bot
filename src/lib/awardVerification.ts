@@ -14,12 +14,14 @@
  * means the award landed, `valueOfToken(id)` returns the points. No event
  * log scanning needed (public RPC endpoints cap getLogs ranges anyway).
  *
- * Meeting numbers recorded in todo lists drift from the numbers minted
- * onchain (the 2026-04-13 makeup batch landed 1-2 meetings below the list
- * that requested it), so verification searches a radius of nearby meeting
- * numbers before declaring an award missing. All hits in the radius are
- * collected, not just the first: a wallet can hold both a weekly game
- * result at the expected meeting AND a makeup award tagged nearby.
+ * The id's period field is NOT the meeting number: **meeting = period + 1**
+ * (ZAOOS research doc 2301, validated against the Airtable CSV record on
+ * 15/18 overlapping meetings). On top of that fixed offset, todo lists can
+ * still drift by a meeting or two from what was minted, so verification
+ * searches a radius of nearby meeting numbers before declaring an award
+ * missing. All hits in the radius are collected, not just the first: a
+ * wallet can hold both a weekly game result at the expected meeting AND a
+ * makeup award tagged nearby.
  *
  * This module is pure (no chain reads); scripts/verify-awards.ts is the
  * viem runner.
@@ -48,25 +50,42 @@ export const AWARD_MINT_TYPES = [10, 0, 1, 2] as const;
 /** How many meeting numbers on each side of the expected one to search. */
 export const MEETING_SEARCH_RADIUS = 2;
 
-/** Reconstruct the deterministic ZOR award NFT id for a wallet + meeting. */
+/** meeting = period + 1 (doc 2301, CSV-validated). */
+export const PERIOD_MEETING_OFFSET = 1;
+
+/** The onchain period field for a human meeting number. */
+export function meetingToPeriod(meeting: number): number {
+  return meeting - PERIOD_MEETING_OFFSET;
+}
+
+/** The human meeting number for an onchain period field. */
+export function periodToMeeting(period: number): number {
+  return period + PERIOD_MEETING_OFFSET;
+}
+
+/** Reconstruct the deterministic ZOR award NFT id for a wallet + onchain
+ * period (use meetingToPeriod to convert a human meeting number). */
 export function packAwardTokenId(
   wallet: string,
-  meeting: number,
+  period: number,
   mintType: number,
 ): bigint {
-  return (BigInt(mintType) << 224n) | (BigInt(meeting) << 160n) | BigInt(wallet);
+  return (BigInt(mintType) << 224n) | (BigInt(period) << 160n) | BigInt(wallet);
 }
 
 /** Decode an award NFT id back into its packed fields. */
 export function unpackAwardTokenId(tokenId: bigint): {
   wallet: `0x${string}`;
+  period: number;
   meeting: number;
   mintType: number;
 } {
   const wallet = tokenId & ((1n << 160n) - 1n);
+  const period = Number((tokenId >> 160n) & ((1n << 64n) - 1n));
   return {
     wallet: `0x${wallet.toString(16).padStart(40, '0')}` as `0x${string}`,
-    meeting: Number((tokenId >> 160n) & ((1n << 64n) - 1n)),
+    period,
+    meeting: periodToMeeting(period),
     mintType: Number(tokenId >> 224n),
   };
 }

@@ -3,29 +3,40 @@ import {
   awardVerdict,
   MEETING_SEARCH_RADIUS,
   meetingSearchRange,
+  meetingToPeriod,
   packAwardTokenId,
   type PendingAward,
+  periodToMeeting,
   unpackAwardTokenId,
 } from './awardVerification.js';
 
-// Zaal's wallet + meeting 109 - the packed id was verified live against the
+// Zaal's wallet + period 109 - the packed id was verified live against the
 // ZOR contract on 2026-08-19: balanceOf(wallet, id) == 1, valueOfToken == 16.
 const ZAAL = '0x7234c36A71ec237c2Ae7698e8916e0735001E9Af';
 
 describe('packAwardTokenId / unpackAwardTokenId', () => {
-  it('packs owner into the low 160 bits, meeting above, mintType on top', () => {
+  it('packs owner into the low 160 bits, period above, mintType on top', () => {
     const id = packAwardTokenId(ZAAL, 109, 10);
     expect(id & ((1n << 160n) - 1n)).toBe(BigInt(ZAAL));
     expect((id >> 160n) & ((1n << 64n) - 1n)).toBe(109n);
     expect(id >> 224n).toBe(10n);
   });
 
-  it('round-trips through unpack', () => {
-    const id = packAwardTokenId(ZAAL, 92, 10);
+  it('round-trips through unpack, exposing both period and meeting', () => {
+    const id = packAwardTokenId(ZAAL, meetingToPeriod(93), 10);
     const fields = unpackAwardTokenId(id);
     expect(fields.wallet).toBe(ZAAL.toLowerCase());
-    expect(fields.meeting).toBe(92);
+    expect(fields.period).toBe(92);
+    expect(fields.meeting).toBe(93);
     expect(fields.mintType).toBe(10);
+  });
+});
+
+describe('period <-> meeting (doc 2301: meeting = period + 1)', () => {
+  it('converts both ways', () => {
+    expect(periodToMeeting(92)).toBe(93);
+    expect(meetingToPeriod(93)).toBe(92);
+    expect(periodToMeeting(meetingToPeriod(110))).toBe(110);
   });
 });
 
