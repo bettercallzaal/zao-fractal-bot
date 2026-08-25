@@ -6,3 +6,6 @@ dist/
 *.log
 .worktrees/
 *.tsbuildinfo
+
+# per-machine agent tooling
+.serena/
