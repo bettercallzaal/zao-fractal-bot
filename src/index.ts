@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { Client, Events, GatewayIntentBits } from 'discord.js';
 import { getSupabaseClient } from './lib/supabaseClient.js';
 import { subscribeToCommands } from './commands/subscribeToCommands.js';
+import { registerGameCommands, startCommand } from './discord/gameCommands.js';
 import { createHttpServer } from './http/server.js';
 import { startVoiceTracker } from './awareness/voiceTracker.js';
 import { startHeartbeat } from './awareness/heartbeat.js';
@@ -34,6 +35,13 @@ client.once(Events.ClientReady, (readyClient) => {
   const supabase = getSupabaseClient();
   subscribeToCommands(supabase, readyClient);
   console.log('Subscribed to bot_commands');
+
+  // Respect Game core (Phase 1): /start plus in-thread vote buttons.
+  registerGameCommands(readyClient, supabase);
+  void readyClient.application?.commands
+    .create(startCommand.toJSON())
+    .then(() => console.log('Respect Game commands registered'))
+    .catch((err) => console.error('Failed to register /start:', err));
 
   // Awareness layer (passive): the bot now watches the room and records it.
   const trackedVoice = (process.env.FRACTAL_VOICE_CHANNEL_IDS ?? '')
