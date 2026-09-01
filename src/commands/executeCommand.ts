@@ -1,5 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Client } from 'discord.js';
 import { type Member, resolveRoster } from '../lib/nameResolver.js';
 import {
   collectReactionPresence,
@@ -29,13 +28,21 @@ import { distributeIntoGroups } from './randomize.js';
 
 type ActionResult = { status: 'done' | 'failed' | 'already_processed'; result?: unknown };
 
+/** The subset of the Discord client the presence collectors actually use.
+ * Declared structurally so the action layer never imports discord.js - see
+ * src/architecture.test.ts and spec section 3. The adapter passes the real
+ * Client, which satisfies this shape. */
+export interface DiscordClientLike {
+  guilds: { fetch(id: string): Promise<unknown> };
+}
+
 /** Action runner context. Actions that only transform their params ignore it
  * (e.g. randomize); actions that read state use `ctx.supabase`. Actions that
  * read live Discord state (captureRoster) need `ctx.client` - it is optional
  * because the HTTP fallback path and unit tests run without a logged-in bot. */
 interface ActionContext {
   supabase: SupabaseClient;
-  client?: Client;
+  client?: DiscordClientLike;
 }
 
 const ACTIONS: Record<
@@ -96,6 +103,11 @@ const ACTIONS: Record<
     if (!ctx.client) {
       throw new Error('captureRoster requires the live bot client (not available on the HTTP path)');
     }
+    // The adapter always passes a real discord.js Client; this layer only
+    // knows the structural shape, and the presence collectors are typed
+    // against the real Client. One cast at the boundary keeps discord.js out
+    // of every signature here. See src/architecture.test.ts and spec section 3.
+    const client = ctx.client as never;
     const guildId = params.guildId as string | undefined;
     if (!guildId) throw new Error('captureRoster requires a `guildId`');
 
@@ -115,13 +127,13 @@ const ACTIONS: Record<
     const sourcesUsed: Record<string, number> = {};
 
     if (voiceChannelId) {
-      const voice = await collectVoicePresence(ctx.client, guildId, voiceChannelId);
+      const voice = await collectVoicePresence(client, guildId, voiceChannelId);
       signalLists.push(voice);
       sourcesUsed.voice = voice.length;
     }
     if (textChannelId) {
       const text = await collectTextPresence(
-        ctx.client,
+        client,
         guildId,
         textChannelId,
         lookbackMinutes * 60_000,
@@ -132,7 +144,7 @@ const ACTIONS: Record<
     }
     if (reaction?.channelId && reaction?.messageId) {
       const reacted = await collectReactionPresence(
-        ctx.client,
+        client,
         guildId,
         reaction.channelId,
         reaction.messageId,
@@ -565,7 +577,7 @@ export async function executeCommand(
   params: Record<string, unknown>,
   idempotencyKey: string,
   requestedBy: string,
-  client?: Client,
+  client?: DiscordClientLike,
 ): Promise<ActionResult> {
   // Reject unknown actions before attempting to claim the row.
   // This ensures invalid actions fail fast without wasting a database claim.
