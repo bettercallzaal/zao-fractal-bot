@@ -1,5 +1,5 @@
 import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
-import type { Client } from 'discord.js';
+import type { DiscordClientLike } from './executeCommand.js';
 import { executeCommand } from './executeCommand.js';
 
 /** Listens for new rows in bot_commands and executes them. Only reacts to
@@ -7,7 +7,7 @@ import { executeCommand } from './executeCommand.js';
  * by the HTTP fallback racing ahead) are left alone since executeCommand's
  * own dedupe already claimed them. The live Discord `client` is passed through
  * so actions that read Discord state (captureRoster) can reach it. */
-export function subscribeToCommands(supabase: SupabaseClient, client?: Client): RealtimeChannel {
+export function subscribeToCommands(supabase: SupabaseClient, client?: DiscordClientLike): RealtimeChannel {
   return supabase
     .channel('bot_commands_listener')
     .on(
