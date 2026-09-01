@@ -1,0 +1,53 @@
+name: test
+
+# WHY THIS EXISTS. On 2026-09-01 a reviewer cloned this repo fresh, ran
+# `npm install`, and got 7 failing test files and two TS2307 errors for
+# @fractalbot/shared - while the same commit was clean in a working tree that
+# had built it earlier. The code was fine. The repo simply could not be started
+# from a clone, and nothing said so.
+#
+# packages/shared declares main and types under dist/, and dist/ is gitignored -
+# correctly, it is a build artifact. So a fresh checkout has the source and not
+# the types. A `prepare` script in that package now builds it on install, and
+# this workflow is what stops that regressing: it does exactly what a newcomer
+# does, from nothing, every time.
+#
+# Same shape as gstack browse/dist never being built - correctly ignored,
+# correctly absent on a clone, and silently fatal to whoever starts there.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  fresh-clone:
+    name: a fresh clone must typecheck and test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20.x, 22.x]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      # No cache and no prior dist on purpose. The point of this job is the
+      # newcomer's path, so anything that makes it easier than theirs makes it
+      # useless.
+      - run: npm install
+
+      # Asserts the artifact rather than the exit code: `npm install` succeeds
+      # whether or not prepare produced anything, and an empty dist/ is exactly
+      # the failure this job exists to catch.
+      - name: shared package built by install
+        run: |
+          test -f packages/shared/dist/index.js \
+            || { echo "packages/shared/dist/index.js missing after npm install - the prepare script did not run"; exit 1; }
+          test -f packages/shared/dist/index.d.ts \
+            || { echo "packages/shared/dist/index.d.ts missing - types will not resolve for consumers"; exit 1; }
+
+      - run: npm run typecheck
+      - run: npm test
