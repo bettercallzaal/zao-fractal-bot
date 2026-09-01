@@ -183,3 +183,51 @@ describe('executeCommand with UPDATE-based claiming', () => {
     ).rejects.toThrow('Failed to update row after successful execution');
   });
 });
+
+/** Records every table an action reads, and serves the claim/complete flow so
+ * the action under test actually runs. The shared makeFakeSupabase above
+ * ignores the table name, which is exactly why a query against a table that
+ * does not exist passed CI for months: a mocked client cannot tell you a
+ * relation is missing. This fake cannot either - so instead of pretending to
+ * check existence, it pins the set of tables an action reads, and that set is
+ * checked against the live database by hand. */
+function makeTableRecordingSupabase(idempotencyKey: string, tablesRead: string[]) {
+  const row: Record<string, any> = { id: 'row-1', idempotency_key: idempotencyKey, status: 'pending' };
+  return {
+    from: (table: string) => ({
+      update: (values: Record<string, any>) =>
+        values.status === 'processing'
+          ? {
+              eq: () => ({
+                eq: () => ({
+                  select: () => ({ single: async () => ({ data: row, error: null }) }),
+                }),
+              }),
+            }
+          : { eq: () => Promise.resolve({ error: null }) },
+      select: (_cols?: string) => {
+        // A bare `.select()` that is awaited directly is a table read by an action.
+        // The claim path never reaches here; it goes through `update`.
+        if (table !== 'bot_commands') tablesRead.push(table);
+        return Promise.resolve({ data: [], error: null });
+      },
+    }),
+  };
+}
+
+describe('bridgeIdentities reads only tables that exist', () => {
+  /** MEASURED 2026-09-01 against the ZAO OS project (efsxtoxvigqowjhgcbiz):
+   * respect_members and users exist; `wallets` returns 404 PGRST205 and never
+   * existed. This action used to read all three, so it threw on first run
+   * while its mocked tests stayed green. See
+   * docs/superpowers/specs/2026-09-01-respect-game-core-design.md section 5.1. */
+  it('does not query the wallets table, which does not exist', async () => {
+    const tablesRead: string[] = [];
+    const supabase = makeTableRecordingSupabase('idem-bridge', tablesRead);
+
+    await executeCommand(supabase as any, 'bridgeIdentities', {}, 'idem-bridge', 'admin');
+
+    expect(tablesRead).not.toContain('wallets');
+    expect(new Set(tablesRead)).toEqual(new Set(['respect_members', 'users']));
+  });
+});

@@ -24,7 +24,6 @@ import {
   type UnifiedIdentity,
   type UserRow,
   unifyIdentities,
-  type WalletRow,
 } from '../lib/identityBridge.js';
 import { distributeIntoGroups } from './randomize.js';
 
@@ -276,19 +275,21 @@ const ACTIONS: Record<
    * `wallets` (e.g. the members a roster capture just found). This is the
    * foundation of every Farcaster<->Discord integration. Read-only. */
   bridgeIdentities: async (params, ctx) => {
-    const [members, users, wallets] = await Promise.all([
+    // MEASURED 2026-09-01 against the ZAO OS project (efsxtoxvigqowjhgcbiz):
+    // there is no `wallets` table. This used to read one, so the action threw
+    // on first run while its mocked tests stayed green. `unifyIdentities`
+    // already takes `wallets` as optional, and the discord_id -> wallet link it
+    // provided is covered by users.primary_wallet.
+    const [members, users] = await Promise.all([
       ctx.supabase.from('respect_members').select('name, wallet_address, fid'),
       ctx.supabase.from('users').select('discord_id, primary_wallet, display_name, fid'),
-      ctx.supabase.from('wallets').select('discord_id, wallet_address'),
     ]);
     if (members.error) throw members.error;
     if (users.error) throw users.error;
-    if (wallets.error) throw wallets.error;
 
     const identities = unifyIdentities({
       respectMembers: (members.data ?? []) as RespectMemberRow[],
       users: (users.data ?? []) as UserRow[],
-      wallets: (wallets.data ?? []) as WalletRow[],
     });
 
     // Optional filtering by the caller's scope.
