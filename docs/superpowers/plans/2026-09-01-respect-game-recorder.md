@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Record a real ZAO fractal end to end - session, roster, elimination voting, results - into `fractal_sessions` and `fractal_scores`, so the recording gap that has been open since 2026-03-23 stops growing.
+**Goal:** Record a real ZAO fractal end to end - session, roster, elimination voting, results - into `fractal_sessions` and `fractal_scores`, and resume it after a restart, so the recording gap that has been open since 2026-03-23 stops growing.
 
 **Architecture:** Three layers with an enforced boundary. `src/game/` is a pure engine (state plus event in, new state out, no I/O). `src/lib/gameRepo.ts` is the only file that talks to Supabase for game state. `src/commands/respectGame.ts` orchestrates. `src/discord/` is a thin adapter and the only layer that imports `discord.js`. The database is the state machine: a session row exists from `/start`, every vote is a write, and a failed write fails the round visibly rather than silently.
 
@@ -16,6 +16,8 @@
 - **Database: the ZAO OS project only** (`efsxtoxvigqowjhgcbiz`). Spec section 4. A second Supabase project (`etwvzrmlxeobinrlytza`, cowork) has its own unrelated `bot_commands` table with different columns. Pointing the bot at it would half-work and then corrupt.
 - **Status vocabulary is exactly `active`, `completed`, `paused`.** Spec section 5.2. These are the three values `ZAO OS V1/src/app/api/discord/fractal-live/route.ts` already queries. Do not invent a fourth.
 - **Respect ladder is `[110, 68, 42, 26, 16, 10]`**, rank 1 (Level 6) through rank 6 (Level 1), already in `packages/shared/src/config.ts` as `RESPECT_POINTS`. Do not redefine it.
+- **The consensus rule.** Spec section 7.1. A round is evaluated only once EVERY participant has voted, never on each vote as it lands. The threshold is a STRICT majority (4 of 6, 3 of 4), which makes a tie arithmetically impossible, so there is no tie break of any kind. If nobody clears the bar, voting stays open and members change their votes. Zaal, 2026-09-01: "No tie break we need consensus to move forward."
+- **Resume is in Phase 1.** Spec section 2. A restart mid-fractal rehydrates participants, winners and votes from the database. It was originally phase 4; Zaal moved it.
 - **Levels run 6 down to 1**: `STARTING_LEVEL = 6`, `ENDING_LEVEL = 1`, `MAX_GROUP_MEMBERS = 6`, `MIN_GROUP_MEMBERS = 2`, all in `packages/shared/src/config.ts`.
 - **No file under `src/game/` or `src/commands/` may import `discord.js`.** Spec section 3. Task 2 enforces this with a test.
 - **No fire-and-forget in the recording path.** Spec section 10. Every persistence call is awaited and its error propagated. This is the single rule the whole spec exists to establish.
@@ -301,7 +303,7 @@ git commit -m "test: enforce that game and action layers never import discord.js
 - Test: `src/game/session.test.ts`
 
 **Interfaces:**
-- Consumes: `RESPECT_POINTS`, `STARTING_LEVEL`, `MIN_GROUP_MEMBERS` from `@fractalbot/shared`; `majorityThreshold` from `../lib/voteThreshold.js`.
+- Consumes: `RESPECT_POINTS`, `STARTING_LEVEL`, `MIN_GROUP_MEMBERS` from `@fractalbot/shared`; `findRoundWinner`, `majorityThreshold` from `../lib/voteThreshold.js`.
 - Produces:
 
 ```typescript
@@ -326,6 +328,7 @@ export interface VoteOutcome {
   reason?: 'session_not_active' | 'not_participant' | 'not_candidate';
   previousCandidateId: string | null;
   roundWinnerId: string | null;
+  awaitingVoters: string[];
   sessionComplete: boolean;
 }
 
@@ -339,9 +342,15 @@ export function startSession(input: {
 }): GameState;
 export function activeCandidates(state: GameState): Participant[];
 export function votesNeeded(state: GameState): number;
+export function awaitingVoters(state: GameState): string[];
 export function castVote(state: GameState, voterId: string, candidateId: string): VoteOutcome;
 export function finalRanking(state: GameState): RankedMember[];
 ```
+
+**The rule that shapes this whole file:** a round is evaluated only once every
+participant has voted, and the threshold is a strict majority so no tie can
+exist. There is no tie-break code to write. If that tempts you to add one for
+an edge case, the edge case is wrong.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -351,6 +360,7 @@ Create `src/game/session.test.ts`:
 import { describe, expect, it } from 'vitest';
 import {
   activeCandidates,
+  awaitingVoters,
   castVote,
   finalRanking,
   type GameState,
@@ -376,6 +386,22 @@ function newGame(n = 4): GameState {
   });
 }
 
+/** Everyone votes for `candidateId` except the overrides given. */
+function everyoneVotes(
+  state: GameState,
+  candidateId: string,
+  overrides: Record<string, string> = {},
+): GameState {
+  let s = state;
+  for (const p of s.participants) {
+    const choice = overrides[p.discordId] ?? candidateId;
+    const out = castVote(s, p.discordId, choice);
+    s = out.state;
+    if (out.roundWinnerId) break;
+  }
+  return s;
+}
+
 describe('startSession', () => {
   it('opens at level 6 with everyone a candidate and no votes', () => {
     const s = newGame(4);
@@ -394,41 +420,82 @@ describe('startSession', () => {
 });
 
 describe('votesNeeded', () => {
-  it('is a majority of the full group, not of the remaining candidates', () => {
-    // Four members: 3 needed. It must not drop to 2 after someone is eliminated.
-    const s = newGame(4);
-    expect(votesNeeded(s)).toBe(2);
-    const after = castVote(castVote(s, 'u1', 'u2').state, 'u3', 'u2').state;
-    expect(votesNeeded(after)).toBe(2);
-    expect(after.winners).toHaveLength(1);
+  it('is a strict majority of the full group, not half and not of the remaining candidates', () => {
+    expect(votesNeeded(newGame(4))).toBe(3);
+    expect(votesNeeded(newGame(6))).toBe(4);
+  });
+
+  it('does not fall as members are eliminated', () => {
+    let s = newGame(4);
+    s = everyoneVotes(s, 'u2');
+    expect(s.winners).toHaveLength(1);
+    expect(votesNeeded(s)).toBe(3);
   });
 });
 
-describe('castVote', () => {
-  it('records a vote without resolving when below threshold', () => {
-    const s = newGame(6);
-    const out = castVote(s, 'u1', 'u2');
-    expect(out.accepted).toBe(true);
+describe('the consensus rule', () => {
+  it('does not resolve the round until every participant has voted', () => {
+    // Three of four vote the same way. That is already a strict majority, but
+    // the fourth member has not spoken, so the round stays open.
+    let s = newGame(4);
+    let out = castVote(s, 'u1', 'u2');
+    out = castVote(out.state, 'u2', 'u2');
+    out = castVote(out.state, 'u3', 'u2');
     expect(out.roundWinnerId).toBeNull();
-    expect(out.state.votes).toEqual({ u1: 'u2' });
+    expect(out.awaitingVoters).toEqual(['u4']);
+    expect(out.state.currentLevel).toBe(6);
   });
 
+  it('resolves once the last voter speaks', () => {
+    let out = castVote(newGame(4), 'u1', 'u2');
+    out = castVote(out.state, 'u2', 'u2');
+    out = castVote(out.state, 'u3', 'u2');
+    out = castVote(out.state, 'u4', 'u3');
+    expect(out.roundWinnerId).toBe('u2');
+    expect(out.awaitingVoters).toEqual([]);
+    expect(out.state.currentLevel).toBe(5);
+    expect(out.state.votes).toEqual({});
+  });
+
+  it('leaves the round open when everyone has voted and nobody has a majority', () => {
+    // 2-2 in a group of 4. No tie break exists, so nothing resolves and the
+    // group keeps talking. Zaal, 2026-09-01: "No tie break we need consensus
+    // to move forward."
+    let out = castVote(newGame(4), 'u1', 'u3');
+    out = castVote(out.state, 'u2', 'u3');
+    out = castVote(out.state, 'u3', 'u4');
+    out = castVote(out.state, 'u4', 'u4');
+    expect(out.roundWinnerId).toBeNull();
+    expect(out.awaitingVoters).toEqual([]);
+    expect(out.state.currentLevel).toBe(6);
+    expect(out.state.winners).toEqual([]);
+  });
+
+  it('resolves when someone changes their mind after a deadlock', () => {
+    let out = castVote(newGame(4), 'u1', 'u3');
+    out = castVote(out.state, 'u2', 'u3');
+    out = castVote(out.state, 'u3', 'u4');
+    out = castVote(out.state, 'u4', 'u4');
+    out = castVote(out.state, 'u4', 'u3');
+    expect(out.previousCandidateId).toBe('u4');
+    expect(out.roundWinnerId).toBe('u3');
+  });
+
+  it('a strict majority makes two winners arithmetically impossible', () => {
+    // The property the whole rule rests on. If this ever fails, a tie state
+    // exists and the design has a hole rather than a missing tie break.
+    for (const n of [2, 3, 4, 5, 6]) {
+      expect(votesNeeded(newGame(n)) * 2).toBeGreaterThan(n);
+    }
+  });
+});
+
+describe('castVote validation', () => {
   it('replaces a voter previous choice rather than adding a second vote', () => {
-    const s = newGame(6);
-    const first = castVote(s, 'u1', 'u2').state;
+    const first = castVote(newGame(6), 'u1', 'u2').state;
     const out = castVote(first, 'u1', 'u3');
     expect(out.previousCandidateId).toBe('u2');
     expect(out.state.votes).toEqual({ u1: 'u3' });
-  });
-
-  it('resolves the round and descends a level when the threshold is met', () => {
-    const s = newGame(4); // threshold 2
-    const out = castVote(castVote(s, 'u1', 'u2').state, 'u3', 'u2');
-    expect(out.roundWinnerId).toBe('u2');
-    expect(out.state.currentLevel).toBe(5);
-    expect(out.state.winners).toEqual([{ level: 6, discordId: 'u2' }]);
-    expect(out.state.votes).toEqual({});
-    expect(activeCandidates(out.state).map((p) => p.discordId)).toEqual(['u1', 'u3', 'u4']);
   });
 
   it('rejects a vote from someone who is not in the group', () => {
@@ -438,7 +505,7 @@ describe('castVote', () => {
   });
 
   it('rejects a vote for someone already eliminated', () => {
-    const s = castVote(castVote(newGame(4), 'u1', 'u2').state, 'u3', 'u2').state;
+    const s = everyoneVotes(newGame(4), 'u2');
     const out = castVote(s, 'u1', 'u2');
     expect(out.accepted).toBe(false);
     expect(out.reason).toBe('not_candidate');
@@ -448,35 +515,32 @@ describe('castVote', () => {
     const s: GameState = { ...newGame(4), status: 'paused' };
     expect(castVote(s, 'u1', 'u2').reason).toBe('session_not_active');
   });
+});
 
-  it('completes the session when one candidate remains', () => {
-    let s = newGame(3); // threshold 2
-    s = castVote(castVote(s, 'u1', 'u2').state, 'u3', 'u2').state;
-    const out = castVote(castVote(s, 'u1', 'u3').state, 'u3', 'u3');
+describe('session completion', () => {
+  it('completes when one candidate remains', () => {
+    let s = newGame(3); // strict majority of 3 is 2
+    s = everyoneVotes(s, 'u2');
+    let out = castVote(s, 'u1', 'u3');
+    out = castVote(out.state, 'u2', 'u3');
+    out = castVote(out.state, 'u3', 'u3');
     expect(out.sessionComplete).toBe(true);
     expect(out.state.status).toBe('completed');
-  });
-
-  it('breaks a tie deterministically rather than at random', () => {
-    // Two candidates each reach the threshold on the same vote count.
-    // v1 picked at random, which makes a fractal unreproducible. Lowest
-    // discordId wins so the same votes always give the same result.
-    const s = newGame(4);
-    const a = castVote(castVote(s, 'u1', 'u3').state, 'u2', 'u3').state;
-    expect(a.winners).toEqual([{ level: 6, discordId: 'u3' }]);
   });
 });
 
 describe('finalRanking', () => {
   it('assigns the Respect ladder by rank and gives the last member the lowest level', () => {
     let s = newGame(3);
-    s = castVote(castVote(s, 'u1', 'u2').state, 'u3', 'u2').state; // u2 takes level 6
-    s = castVote(castVote(s, 'u1', 'u3').state, 'u3', 'u3').state; // u3 takes level 5
-    const ranked = finalRanking(s);
-    expect(ranked).toEqual([
-      { discordId: 'u2', displayName: 'User 2', wallet: ranked[0].wallet, level: 6, rank: 1, respectPoints: 110 },
-      { discordId: 'u3', displayName: 'User 3', wallet: ranked[1].wallet, level: 5, rank: 2, respectPoints: 68 },
-      { discordId: 'u1', displayName: 'User 1', wallet: ranked[2].wallet, level: 4, rank: 3, respectPoints: 42 },
+    s = everyoneVotes(s, 'u2');
+    let out = castVote(s, 'u1', 'u3');
+    out = castVote(out.state, 'u2', 'u3');
+    out = castVote(out.state, 'u3', 'u3');
+    const ranked = finalRanking(out.state);
+    expect(ranked.map((r) => [r.discordId, r.level, r.rank, r.respectPoints])).toEqual([
+      ['u2', 6, 1, 110],
+      ['u3', 5, 2, 68],
+      ['u1', 4, 3, 42],
     ]);
   });
 
@@ -500,17 +564,19 @@ Create `src/game/session.ts`:
 // src/architecture.test.ts and spec section 3. Every function takes state and
 // returns new state; nothing here mutates its input.
 //
-// Ported in behaviour from fractalbotapril2026 cogs/fractal/group.py, with two
-// deliberate differences, both noted at their site: the tie break is
-// deterministic, and an eliminated candidate is rejected explicitly rather
-// than falling through a null lookup.
+// Ported in behaviour from fractalbotapril2026 cogs/fractal/group.py, with one
+// deliberate and load-bearing difference: the consensus rule in spec section
+// 7.1. v1 read the tally after every vote and broke ties at random. This waits
+// for every participant to vote and uses a strict majority, so a tie cannot
+// arise and there is nothing to break. A split group does not resolve until
+// somebody changes their mind, which is the intent rather than a deadlock.
 
 import {
   MIN_GROUP_MEMBERS,
   RESPECT_POINTS,
   STARTING_LEVEL,
 } from '@fractalbot/shared';
-import { majorityThreshold } from '../lib/voteThreshold.js';
+import { findRoundWinner, majorityThreshold } from '../lib/voteThreshold.js';
 
 export interface Participant {
   discordId: string;
@@ -543,6 +609,9 @@ export interface VoteOutcome {
   reason?: 'session_not_active' | 'not_participant' | 'not_candidate';
   previousCandidateId: string | null;
   roundWinnerId: string | null;
+  /** Who the round is still waiting on. Empty and no winner means the group
+   * has voted and not agreed - the round stays open on purpose. */
+  awaitingVoters: string[];
   sessionComplete: boolean;
 }
 
@@ -583,61 +652,73 @@ export function activeCandidates(state: GameState): Participant[] {
   return state.participants.filter((p) => !won.has(p.discordId));
 }
 
-/** Majority of the FULL group, so the bar does not fall as people are
- * eliminated. Carried forward from group.py get_vote_threshold. */
+/** Strict majority of the FULL group. Everyone votes every round, including
+ * members who already hold a level, so the bar does not fall as the candidate
+ * pool shrinks. */
 export function votesNeeded(state: GameState): number {
   return majorityThreshold(state.participants.length);
 }
 
+export function awaitingVoters(state: GameState): string[] {
+  return state.participants.filter((p) => !(p.discordId in state.votes)).map((p) => p.discordId);
+}
+
 export function castVote(state: GameState, voterId: string, candidateId: string): VoteOutcome {
-  const unchanged = (
-    reason: VoteOutcome['reason'],
-  ): VoteOutcome => ({
+  const unchanged = (reason: VoteOutcome['reason']): VoteOutcome => ({
     state,
     accepted: false,
     reason,
     previousCandidateId: null,
     roundWinnerId: null,
+    awaitingVoters: awaitingVoters(state),
     sessionComplete: false,
   });
 
   if (state.status !== 'active') return unchanged('session_not_active');
   if (!state.participants.some((p) => p.discordId === voterId)) return unchanged('not_participant');
-
-  const candidates = activeCandidates(state);
-  if (!candidates.some((p) => p.discordId === candidateId)) return unchanged('not_candidate');
+  if (!activeCandidates(state).some((p) => p.discordId === candidateId)) {
+    return unchanged('not_candidate');
+  }
 
   const previousCandidateId = state.votes[voterId] ?? null;
   const votes = { ...state.votes, [voterId]: candidateId };
+  const voted: GameState = { ...state, votes };
+
+  const stillOut = awaitingVoters(voted);
+  if (stillOut.length > 0) {
+    // The consensus rule: do not read the tally until the group has spoken.
+    return {
+      state: voted,
+      accepted: true,
+      previousCandidateId,
+      roundWinnerId: null,
+      awaitingVoters: stillOut,
+      sessionComplete: false,
+    };
+  }
 
   const tally = new Map<string, number>();
   for (const choice of Object.values(votes)) {
     tally.set(choice, (tally.get(choice) ?? 0) + 1);
   }
 
-  const threshold = votesNeeded(state);
-  const cleared = [...tally.entries()]
-    .filter(([, count]) => count >= threshold)
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-
-  if (cleared.length === 0) {
+  // A strict majority means at most one candidate can clear, so this is the
+  // winner or there is none. No tie is representable.
+  const winnerId = findRoundWinner(tally, state.participants.length);
+  if (!winnerId) {
     return {
-      state: { ...state, votes },
+      state: voted,
       accepted: true,
       previousCandidateId,
       roundWinnerId: null,
+      awaitingVoters: [],
       sessionComplete: false,
     };
   }
 
-  // Deterministic tie break. v1 chose at random (group.py check_for_winner),
-  // which makes the same set of votes produce different fractals and makes a
-  // disputed result impossible to re-derive. Lowest discordId wins.
-  const winnerId = cleared[0][0];
   const winners = [...state.winners, { level: state.currentLevel, discordId: winnerId }];
   const nextLevel = state.currentLevel - 1;
-  const remaining = state.participants.length - winners.length;
-  const complete = remaining <= 1 || nextLevel < 1;
+  const complete = state.participants.length - winners.length <= 1 || nextLevel < 1;
 
   return {
     state: {
@@ -650,6 +731,7 @@ export function castVote(state: GameState, voterId: string, candidateId: string)
     accepted: true,
     previousCandidateId,
     roundWinnerId: winnerId,
+    awaitingVoters: [],
     sessionComplete: complete,
   };
 }
@@ -688,18 +770,18 @@ export function finalRanking(state: GameState): RankedMember[] {
 - [ ] **Step 4: Run the tests**
 
 Run: `npx vitest run src/game/session.test.ts`
-Expected: PASS, 12 tests.
+Expected: PASS, 15 tests.
 
 - [ ] **Step 5: Run the full suite and the type check**
 
 Run: `npx vitest run && npx tsc --noEmit`
-Expected: all pass, no type errors.
+Expected: all pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/game/session.ts src/game/session.test.ts
-git commit -m "feat: pure elimination-game engine with a deterministic tie break"
+git commit -m "feat: elimination engine under the consensus rule, no tie break"
 ```
 
 ---
@@ -931,34 +1013,113 @@ export async function createSession(
     .single();
   if (error) throw new Error(`createSession: ${error.message}`);
   if (!data?.id) throw new Error('createSession: insert returned no id');
-  return { sessionId: data.id as string, state };
+  const sessionId = data.id as string;
+
+  // The roster is persisted here, not just held in memory, because
+  // loadSessionByThread rehydrates participants from it after a restart.
+  // Without this write, resume would come back with an empty group.
+  const roster = await sb.from('discord_roster').insert(
+    state.participants.map((p) => ({
+      session_id: sessionId,
+      discord_id: p.discordId,
+      display_name: p.displayName,
+      wallet_address: p.wallet,
+      sources: ['thread'],
+      confidence: 'manual',
+      captured_at: new Date().toISOString(),
+    })),
+  );
+  if (roster.error) throw new Error(`createSession (roster): ${roster.error.message}`);
+
+  return { sessionId, state };
 }
 
+/** Full rehydration: session, participants, level winners and the votes of
+ * the round that was open. A crash during a live call must not cost the group
+ * the round - Zaal moved this into Phase 1 on 2026-09-01.
+ *
+ * Participants come from discord_roster, which captureRoster already writes
+ * keyed on session_id. Winners and the open round come from
+ * discord_fractal_rounds; the open round is the one with resolved_at null. */
 export async function loadSessionByThread(
   sb: SupabaseClient,
   threadId: string,
 ): Promise<StoredSession | null> {
-  const { data, error } = await sb
+  const session = await sb
     .from('fractal_sessions')
     .select('id, meeting_number, group_number, thread_id, status')
     .eq('thread_id', threadId)
     .maybeSingle();
-  if (error) throw new Error(`loadSessionByThread: ${error.message}`);
-  if (!data) return null;
-  // Participants and votes are rehydrated by the caller from discord_roster
-  // and discord_fractal_votes. Phase 1 keeps the in-flight state in the
-  // adapter and reloads from here only on restart.
+  if (session.error) throw new Error(`loadSessionByThread: ${session.error.message}`);
+  if (!session.data) return null;
+  const sessionId = session.data.id as string;
+
+  const roster = await sb
+    .from('discord_roster')
+    .select('discord_id, display_name, wallet_address')
+    .eq('session_id', sessionId);
+  if (roster.error) throw new Error(`loadSessionByThread (roster): ${roster.error.message}`);
+
+  const rounds = await sb
+    .from('discord_fractal_rounds')
+    .select('id, level, winner_discord_id, resolved_at')
+    .eq('session_id', sessionId)
+    .order('level', { ascending: false });
+  if (rounds.error) throw new Error(`loadSessionByThread (rounds): ${rounds.error.message}`);
+
+  const rows = (rounds.data ?? []) as {
+    id: string;
+    level: number;
+    winner_discord_id: string | null;
+    resolved_at: string | null;
+  }[];
+
+  const winners = rows
+    .filter((r) => r.resolved_at !== null && r.winner_discord_id !== null)
+    .map((r) => ({ level: r.level, discordId: r.winner_discord_id as string }));
+
+  const open = rows.find((r) => r.resolved_at === null);
+  let votes: Record<string, string> = {};
+  if (open) {
+    const cast = await sb
+      .from('discord_fractal_votes')
+      .select('voter_discord_id, candidate_discord_id')
+      .eq('round_id', open.id);
+    if (cast.error) throw new Error(`loadSessionByThread (votes): ${cast.error.message}`);
+    votes = Object.fromEntries(
+      ((cast.data ?? []) as { voter_discord_id: string; candidate_discord_id: string }[]).map(
+        (v) => [v.voter_discord_id, v.candidate_discord_id],
+      ),
+    );
+  }
+
+  // The level to resume on is the open round if there is one, otherwise one
+  // below the lowest level already won.
+  const currentLevel = open
+    ? open.level
+    : winners.length > 0
+      ? Math.min(...winners.map((w) => w.level)) - 1
+      : 6;
+
   return {
-    sessionId: data.id as string,
+    sessionId,
     state: {
-      threadId: data.thread_id as string,
-      meetingNumber: (data.meeting_number as number) ?? 0,
-      groupNumber: (data.group_number as string) ?? '1',
-      status: data.status as GameState['status'],
-      currentLevel: 6,
-      participants: [],
-      winners: [],
-      votes: {},
+      threadId: session.data.thread_id as string,
+      meetingNumber: (session.data.meeting_number as number) ?? 0,
+      groupNumber: (session.data.group_number as string) ?? '1',
+      status: session.data.status as GameState['status'],
+      currentLevel,
+      participants: ((roster.data ?? []) as {
+        discord_id: string;
+        display_name: string;
+        wallet_address: string | null;
+      }[]).map((r) => ({
+        discordId: r.discord_id,
+        displayName: r.display_name,
+        wallet: r.wallet_address,
+      })),
+      winners,
+      votes,
     },
   };
 }
@@ -1447,6 +1608,7 @@ import {
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { activeCandidates, type GameState, type Participant } from '../game/session.js';
 import { castFractalVote, startFractal } from '../commands/respectGame.js';
+import { loadSessionByThread } from '../lib/gameRepo.js';
 import { buildVotingRows, parseVoteButtonId } from './votingView.js';
 
 /** In-flight state per thread. The database is the record; this is a cache in
@@ -1526,13 +1688,29 @@ async function handleVote(interaction: Interaction, supabase: SupabaseClient): P
   const parsed = parseVoteButtonId(interaction.customId);
   if (!parsed) return;
 
-  const entry = live.get(parsed.threadId);
+  let entry = live.get(parsed.threadId);
   if (!entry) {
-    await interaction.reply({
-      content: 'That fractal is not in memory. Ask the facilitator to run /start again.',
-      ephemeral: true,
-    });
-    return;
+    // Restart recovery. The database is the record, so a fractal survives the
+    // process dying mid-round - spec section 2, moved into Phase 1 by Zaal on
+    // 2026-09-01 because a crash during a live call should not cost the round.
+    try {
+      const restored = await loadSessionByThread(supabase, parsed.threadId);
+      if (!restored || restored.state.status !== 'active') {
+        await interaction.reply({
+          content: 'That fractal is not open. Ask the facilitator to run /start.',
+          ephemeral: true,
+        });
+        return;
+      }
+      entry = { sessionId: restored.sessionId, state: restored.state };
+      live.set(parsed.threadId, entry);
+    } catch (err) {
+      await interaction.reply({
+        content: `Could not reload that fractal, so your vote was NOT recorded. ${String(err)}`,
+        ephemeral: true,
+      });
+      return;
+    }
   }
 
   try {
@@ -1710,7 +1888,27 @@ Zaal runs this, same as the migration.
 
 **Type consistency.** `GameState`, `Participant`, `RankedMember` and `VoteOutcome` are defined once in Task 3 and imported unchanged in Tasks 4, 5 and 6. `votesNeeded` is the engine function throughout; the repo column is `votes_needed`. `sessionId` is a string everywhere.
 
-**Two things a reviewer should push back on if they disagree.**
+**Two earlier open items, both now closed by Zaal on 2026-09-01.**
 
-1. **The tie break changed.** v1 chose at random. Task 3 makes it deterministic on lowest `discordId`, so the same votes always produce the same fractal and a disputed result can be re-derived. This is a behaviour change from two years of production and it is not in the spec. Flag it to Zaal rather than shipping it quietly.
-2. **`loadSessionByThread` returns a shell.** Task 4 does not rehydrate participants or votes, so a bot restart mid-fractal loses the in-memory round even though the session row survives. The spec says a restart should resume. Phase 1 gets the record right; full rehydration needs `discord_roster` wiring and belongs in the same plan as voice capture. Task 6 tells the user to re-run `/start`, which is honest but is not what the spec promises. Do not let this quietly become permanent.
+1. **The tie break is gone entirely.** The first draft of this plan proposed a
+   deterministic lowest-id break and flagged it as a behaviour change not in
+   the spec. That flag was right and the answer was neither option: "No tie
+   break we need consensus to move forward." The round is now evaluated only
+   once every participant has voted, the threshold is a strict majority so no
+   tie can exist, and a split group simply does not resolve. Spec section 7.1.
+   `majorityThreshold` was corrected at the same time - it returned exactly
+   half for even groups while calling itself a majority, and its own test
+   asserted that bug under the name "strict majority".
+
+2. **Resume is in Phase 1.** `loadSessionByThread` now rehydrates
+   participants, level winners and the open round's votes, `createSession`
+   persists the roster so there is something to rehydrate from, and the vote
+   handler reloads a thread it does not have in memory. Moved out of Phase 4
+   by Zaal, on the grounds that a crash during a live call should never cost
+   the group the round.
+
+**One thing a reviewer should still push back on.** The consensus rule means a
+group that will not agree has no exit. That is deliberate - Zaal chose the
+option with that tradeoff written into it - but nothing in Phase 1 tells a
+facilitator how long a round has been open. If it bites in practice, the fix
+is a nudge, not a tie break.

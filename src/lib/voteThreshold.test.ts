@@ -6,9 +6,24 @@ describe('majorityThreshold', () => {
     expect(majorityThreshold(5)).toBe(3);
   });
 
-  it('rounds up for even group sizes too (strict majority)', () => {
-    expect(majorityThreshold(4)).toBe(2);
-    expect(majorityThreshold(6)).toBe(3);
+  it('is a STRICT majority for even group sizes, not exactly half', () => {
+    // This test previously claimed "strict majority" in its name while
+    // asserting 2 of 4 and 3 of 6 - exactly half. It was asserting the bug.
+    // Half is not a majority, and with the group of 6 that a fractal caps at
+    // it let 3 members decide against the other 3, resolved by whichever
+    // third vote arrived first. See the consensus rule in
+    // docs/superpowers/specs/2026-09-01-respect-game-core-design.md section 7.
+    expect(majorityThreshold(4)).toBe(3);
+    expect(majorityThreshold(6)).toBe(4);
+  });
+
+  it('makes a tie impossible - two candidates cannot both clear it', () => {
+    // Zaal, 2026-09-01: "No tie break we need consensus to move forward."
+    // A strict majority is what makes that coherent: no tie state can exist,
+    // so there is nothing to break. The round simply stays open.
+    for (const n of [2, 3, 4, 5, 6]) {
+      expect(majorityThreshold(n) * 2).toBeGreaterThan(n);
+    }
   });
 
   it('returns 1 for a single-member group', () => {

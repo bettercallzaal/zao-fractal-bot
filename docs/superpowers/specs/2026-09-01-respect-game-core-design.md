@@ -106,9 +106,14 @@ conflicts:
 This is a larger subsystem than it was at the start of the day, and the
 recorder should not wait on the timer. The implementation plan phases it:
 
-1. **Recorder.** Session lifecycle, roster, voting, results, persistence.
-   Enough to record a real fractal, driven manually. This is the phase that
-   stops the gap growing and it ships first.
+1. **Recorder.** Session lifecycle, roster, voting, results, persistence, and
+   resuming a fractal after a restart. Enough to record a real fractal, driven
+   manually. This is the phase that stops the gap growing and it ships first.
+
+   Resume was originally deferred to phase 4, because full rehydration needs
+   roster wiring that arrives with voice capture. Zaal moved it into phase 1 on
+   2026-09-01, on the grounds that a crash during a live call should never cost
+   the group the round.
 2. **Onchain.** Propose, nudge, execute, verify.
 3. **Timer.** The `cogs/timer.py` port (section 8).
 4. **Voice orchestration.** Splitting and moving between rooms.
@@ -286,10 +291,43 @@ back to waitingroom."
 5. Voting opens. Buttons in-thread, one per candidate. **Votes are public**, as
    they have been for two years - Zaal declined to change this, on the grounds
    that it changes the ritual and not just the software.
-6. Elimination proceeds level 6 down to 1 using the existing
-   `majorityThreshold` and `findRoundWinner` in `src/lib/voteThreshold.ts`.
+6. Elimination proceeds level 6 down to 1 under the consensus rule below.
 7. Last level resolved: the bot writes the result, proposes onchain (section
    9), and moves everyone back to the waiting room.
+
+### 7.1 The consensus rule
+
+Zaal, 2026-09-01, asked directly what should happen when the group has not
+agreed: **"No tie break we need consensus to move forward."** He then chose,
+from four readings, that the round should wait for everyone to vote and be
+re-read rather than resolving on the first vote to cross a line.
+
+Two things follow, and the second is a correction to code already in the repo.
+
+**A round is only evaluated once every participant has cast a vote.** Not on
+each vote as it lands. If nobody has cleared the bar, voting stays open and
+members change their votes until someone does. There is no separate re-vote
+round; changing a vote is already how the game works.
+
+**The threshold is a strict majority.** `majorityThreshold` returned
+`floor(n/2) + n%2`, which is exactly half for an even group - 3 of 6 - despite
+its name. That had two consequences. Two candidates could each hold 3 of 6, so
+a tie was reachable at all; and because the tally was read after every vote, a
+3-3 split was settled by whichever third vote arrived first. Half is not a
+majority, and click order is not consensus.
+
+A strict majority - 4 of 6, 3 of 4 - makes a tie arithmetically impossible.
+That is what makes "no tie break" coherent rather than a gap: there is no tie
+state to break, so when nobody clears the bar the round simply stays open and
+the group keeps talking.
+
+**Recorded consequence:** a genuinely split group does not resolve until
+somebody moves. That is the intended behaviour, not a deadlock to engineer
+around. Zaal was shown this tradeoff in the option he chose.
+
+**Rejected, explicitly:** both v1's random tie break and the deterministic
+lowest-id tie break proposed in the first draft of the Phase 1 plan. A tie
+break of any kind produces an answer the group did not reach.
 
 ---
 
