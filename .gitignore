@@ -6,3 +6,6 @@ dist/
 *.log
 .worktrees/
 *.tsbuildinfo
+
+# Serena per-machine tool state (rule stranded on an unmerged branch until now)
+.serena/
