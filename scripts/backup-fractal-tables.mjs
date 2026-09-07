@@ -40,9 +40,14 @@ const FORBIDDEN = /password|token|secret|private_key|posting_key/i;
 async function fetchAll(table, cols) {
   const rows = [];
   for (let offset = 0; ; offset += 1000) {
-    const res = await fetch(`${url}/rest/v1/${table}?select=${cols}&limit=1000&offset=${offset}`, {
-      headers: { apikey: key, Authorization: `Bearer ${key}` },
-    });
+    // order=id.asc is not cosmetic. Postgres gives no row-order guarantee across
+    // LIMIT/OFFSET queries without an ORDER BY, so an unordered page 2 can repeat
+    // a row from page 1 and skip another. A backup that silently drops rows is
+    // worse than one that fails. Every table in TABLES has an `id`.
+    const res = await fetch(
+      `${url}/rest/v1/${table}?select=${cols}&order=id.asc&limit=1000&offset=${offset}`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` } },
+    );
     if (res.status === 404) return null; // table not present yet
     if (!res.ok) throw new Error(`${table}: HTTP ${res.status} ${await res.text()}`);
     const batch = await res.json();
