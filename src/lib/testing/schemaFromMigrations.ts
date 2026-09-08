@@ -66,6 +66,12 @@ export const PARTIALLY_COVERED_TABLES = [
   'users',
 ] as const;
 
+// A composite primary key written as a table-level segment - `primary key
+// (a, b)` - is safe BY MECHANISM, not by luck: its first token is `primary`,
+// which is in this set, so parseColumnSegment refuses to treat the segment
+// as a column at all and cleanly skips it, rather than misparsing "key" as a
+// column name or "(a, b)" as a type. Recorded here so the next reader does
+// not have to re-derive it.
 const TABLE_CONSTRAINT_KEYWORDS = new Set([
   'unique',
   'primary',
@@ -149,7 +155,15 @@ function parseColumnSegment(segment: string): ColumnSchema | null {
   // key` (0003_awareness.sql) never says "not null" but is exactly as
   // required as if it did.
   const notNull = /not\s+null/i.test(rest) || /\bprimary\s+key\b/i.test(rest);
-  const hasDefault = /\bdefault\b/i.test(rest);
+  // A real DEFAULT clause always precedes any CHECK in Postgres's column
+  // grammar, so only look for the `default` keyword in the text before the
+  // first `check` - otherwise a CHECK list that happens to contain the
+  // literal value 'default' (e.g. `check (status in ('default','other'))`)
+  // reads as a DEFAULT clause and silently disables the not-null-on-insert
+  // rule for that column, the one rule with no other backstop.
+  const checkStart = rest.search(/\bcheck\b/i);
+  const beforeCheck = checkStart === -1 ? rest : rest.slice(0, checkStart);
+  const hasDefault = /\bdefault\b/i.test(beforeCheck);
   const inlineCheck = parseInlineCheck(segment);
 
   return {
@@ -191,6 +205,31 @@ function assertOnlyKnownCheckShapes(sql: string, fileLabel: string): void {
   }
 }
 
+// iterAddColumnStatements only recognises `add column if not exists`. An
+// `alter table ... add column <c> ...` that omits that literal phrase - a
+// perfectly ordinary, valid Postgres statement - never enters that regex, so
+// the column silently never joins the model. assertWritable then rejects a
+// correct payload as "no such column", blaming the payload for a gap in this
+// parser. That is the same "silently unconstrained" trap this whole guard
+// exists to catch, just moved from CHECK constraints to ALTER statements -
+// so this fails loudly at parse time instead, naming the migration and the
+// fragment, and pointing at iterAddColumnStatements as the function to teach
+// this shape.
+function assertOnlyKnownAlterAddColumnShapes(sql: string, fileLabel: string): void {
+  const re = /alter\s+table\s+public\.\w+\s+add\s+column\s+(?!if\s+not\s+exists\b)\S+/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(sql))) {
+    throw new Error(
+      `schemaFromMigrations: ${fileLabel} has an "alter table ... add column" statement this ` +
+        `parser does not recognise: ${match[0].trim()} ... Only "add column if not exists" is ` +
+        `understood - teach iterAddColumnStatements this shape (or add "if not exists" to the ` +
+        `migration) before assertWritable can be trusted to enforce it against this column. ` +
+        `Silently leaving the column out of the model would reject a correct payload as an ` +
+        `unknown column.`,
+    );
+  }
+}
+
 // A table-level NAMED check constraint written INSIDE a `create table (...)`
 // body, e.g. `constraint t_status_check check (status in ('a','b'))`, is a
 // separate segment whose first token is `constraint` - parseColumnSegment
@@ -212,11 +251,35 @@ function applyTableLevelNamedChecks(body: string, columns: Map<string, ColumnSch
   }
 }
 
-function applyCreateTables(sql: string, model: SchemaModel): void {
+function applyCreateTables(sql: string, model: SchemaModel, fileLabel: string): void {
   const re = /create table if not exists public\.(\w+)\s*\(/gi;
   let match: RegExpExecArray | null;
   while ((match = re.exec(sql))) {
     const tableName = match[1];
+
+    // applyCreateTables REPLACES a table's column model wholesale - it has
+    // no way to know a later `create table if not exists` is a no-op re-
+    // declaration of a table this parser already modeled (created earlier,
+    // or altered since). Postgres treats the re-declaration as a harmless
+    // no-op; this parser cannot, because re-parsing it would silently drop
+    // any column an earlier ALTER added - e.g. a future re-declaration of
+    // discord_roster that omits is_async (added by 0006) would make
+    // createSession's correct insert look like it uses an unknown column,
+    // accusing a correct payload instead of the migration that narrowed the
+    // model. So this throws at parse time instead: teach applyCreateTables
+    // to MERGE into the existing model rather than replace it before adding
+    // a migration that re-declares an existing table.
+    if (model.tables.has(tableName)) {
+      throw new Error(
+        `schemaFromMigrations: ${fileLabel} has "create table if not exists public.${tableName}" ` +
+          `for a table this parser already has a model for (created or altered by an earlier ` +
+          `migration). applyCreateTables replaces a table's column model wholesale, so re-parsing ` +
+          `this statement would silently drop any column an earlier ALTER added and reject a ` +
+          `correct write as an unknown column. Teach applyCreateTables to merge into the existing ` +
+          `model instead of replacing it before this migration can be trusted.`,
+      );
+    }
+
     const openIndex = match.index + match[0].length - 1;
     const closeIndex = findMatchingParen(sql, openIndex);
     const body = sql.slice(openIndex + 1, closeIndex);
@@ -324,8 +387,9 @@ export interface ZaoosSchemaProvenance {
   fetchedAtUtc: string;
   /** The date by which this snapshot must be re-verified against the live
    * database. See schemaFromMigrations.test.ts's freshness test, which fails
-   * once this date has passed, naming scripts/refresh-zaoos-schema.mjs as the
-   * fix - a time-bound claim nobody re-checks is worse than no claim at all. */
+   * from midnight UTC ON this date - not the day after it - naming
+   * scripts/refresh-zaoos-schema.mjs as the fix. A time-bound claim nobody
+   * re-checks is worse than no claim at all. */
   recheckBy: string;
   note: string;
 }
@@ -416,7 +480,8 @@ export function parseMigrations(sqlTexts: string[], fileLabels: string[] = []): 
     const label = fileLabels[i] ?? `migration[${i}]`;
     const sql = stripComments(raw);
     assertOnlyKnownCheckShapes(sql, label);
-    applyCreateTables(sql, model);
+    assertOnlyKnownAlterAddColumnShapes(sql, label);
+    applyCreateTables(sql, model, label);
     applyAddColumns(sql, model);
     applyAddedChecks(sql, model);
   });

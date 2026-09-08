@@ -86,6 +86,23 @@ describe('schema built from the full migration set', () => {
     ).not.toThrow();
   });
 
+  it('rejects an explicit `{ col: undefined }` on insert the same as a missing key', () => {
+    // The not-null-presence check used `in`, which is true for a key whose
+    // value is explicitly `undefined` - but supabase-js drops `undefined`
+    // keys before serialising a payload, so Postgres sees the column
+    // omitted entirely and rejects the real insert. A fake that lets
+    // `{ display_name: undefined }` through is exactly as wrong as one that
+    // lets a genuinely missing key through.
+    expect(() =>
+      assertWritable(
+        'discord_roster',
+        { display_name: undefined, confidence: 'manual' },
+        schema,
+        'insert',
+      ),
+    ).toThrow(/display_name/);
+  });
+
   it('lists the four tables the migrations cannot see, so the gap is stated, not silent', () => {
     expect(PARTIALLY_COVERED_TABLES).toEqual(
       expect.arrayContaining(['fractal_sessions', 'fractal_scores', 'respect_members', 'users']),
@@ -135,5 +152,23 @@ describe('a PARTIALLY_COVERED_TABLES table - schema comes from the ZAO OS fixtur
     expect(() =>
       assertWritable('fractal_sessions', { status: 'not-a-real-status-value' }, schema),
     ).not.toThrow();
+  });
+
+  it('an unknown-column rejection on this table points at the snapshot, not just the payload', () => {
+    // For the 9 migration-defined tables, an unknown column really does mean
+    // the payload is wrong - the migrations are in this repo. For a
+    // PARTIALLY_COVERED_TABLES table the likelier cause is the reverse: the
+    // checked-in ZAO OS snapshot is stale against a database this repo does
+    // not own. The message must say so and name the refresh script, the same
+    // treatment tableCoverage.test.ts's own unknown-table message gets.
+    try {
+      assertWritable('fractal_sessions', { not_a_real_column: 1 }, schema);
+      throw new Error('expected assertWritable to throw');
+    } catch (err) {
+      const message = (err as Error).message;
+      expect(message).toContain('not_a_real_column');
+      expect(message).toContain('refresh-zaoos-schema.mjs');
+      expect(message).toContain('stale');
+    }
   });
 });

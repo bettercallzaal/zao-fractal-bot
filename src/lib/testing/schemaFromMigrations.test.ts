@@ -105,6 +105,86 @@ describe('unparseable CHECK constraints fail loudly rather than being silently s
   });
 });
 
+describe('an "alter table ... add column" without the literal "if not exists" fails loudly', () => {
+  // iterAddColumnStatements only recognises `add column if not exists`. A
+  // migration that writes ordinary, valid Postgres - `add column b text;`,
+  // with no "if not exists" - never enters that regex, so the column never
+  // joins the model and assertWritable rejects a correct payload as an
+  // unknown column, blaming the payload for a parser gap. Failing at parse
+  // time, naming the migration and the fragment, turns that into a clear
+  // "teach the parser this shape" signal instead of a wrong accusation.
+  const sql = `
+    create table if not exists public.some_table (
+      id uuid primary key default gen_random_uuid()
+    );
+
+    alter table public.some_table add column b text;
+  `;
+
+  it('throws at schema-build time, naming the migration file', () => {
+    expect(() => parseMigrations([sql], ['0099_bare_add_column.sql'])).toThrow(
+      /0099_bare_add_column\.sql/,
+    );
+  });
+
+  it('names the offending fragment in the message', () => {
+    expect(() => parseMigrations([sql], ['0099_bare_add_column.sql'])).toThrow(
+      /add column b/,
+    );
+  });
+
+  it('does not false-positive on the real, correctly-spelled shape', () => {
+    const good = `
+      create table if not exists public.some_table (
+        id uuid primary key default gen_random_uuid()
+      );
+
+      alter table public.some_table add column if not exists b text;
+    `;
+    expect(() => parseMigrations([good], ['0099_good.sql'])).not.toThrow();
+  });
+});
+
+describe('a "create table if not exists" that re-declares an already-modeled table fails loudly', () => {
+  // applyCreateTables replaces a table's column model wholesale. A LATER
+  // migration that re-declares a table this parser already has a model for
+  // (created earlier, or altered since) would silently drop any column an
+  // earlier ALTER added - e.g. a future re-declaration of discord_roster
+  // that omits is_async (added by 0006) would make createSession's correct
+  // insert look like it uses an unknown column. Throwing at parse time turns
+  // that into a clear signal instead of a wrong accusation against a correct
+  // payload.
+  const sql = `
+    create table if not exists public.discord_roster (
+      session_id uuid not null
+    );
+
+    alter table public.discord_roster add column if not exists is_async boolean not null default false;
+
+    create table if not exists public.discord_roster (
+      session_id uuid not null
+    );
+  `;
+
+  it('throws at schema-build time, naming the migration file', () => {
+    expect(() => parseMigrations([sql], ['0099_redeclared_table.sql'])).toThrow(
+      /0099_redeclared_table\.sql/,
+    );
+  });
+
+  it('names the re-declared table in the message', () => {
+    expect(() => parseMigrations([sql], ['0099_redeclared_table.sql'])).toThrow(
+      /discord_roster/,
+    );
+  });
+
+  it('names applyCreateTables as the function to extend', () => {
+    expect(() => parseMigrations([sql], ['0099_redeclared_table.sql'])).toThrow(
+      /applyCreateTables/,
+    );
+  });
+});
+
 describe('a table-level named CHECK constraint inside a create table body is enforced', () => {
   // `constraint <name> check (<col> in (<list>))` written INSIDE a
   // `create table ( ... )` body (as opposed to a later `alter table ... add
@@ -136,6 +216,43 @@ describe('a table-level named CHECK constraint inside a create table body is enf
   it('and a value inside the list passes', () => {
     const schema = parseMigrations([sql]);
     expect(() => assertWritable('t', { status: 'a' }, schema)).not.toThrow();
+  });
+});
+
+describe('a CHECK list that merely contains the word "default" does not disable the not-null rule', () => {
+  // hasDefault used to search the whole column-definition text for the bare
+  // word "default" - which also matches a CHECK-list value literally named
+  // 'default', e.g. `check (status in ('default','other'))`. That is a false
+  // negative in the one rule (not-null-no-default on insert) with no other
+  // backstop: a column with no real DEFAULT clause would be treated as
+  // having one and silently stop being required.
+  const sql = `
+    create table if not exists public.some_table (
+      status text not null check (status in ('default','other'))
+    );
+  `;
+
+  it('does not treat the CHECK list as a DEFAULT clause', () => {
+    const schema = parseMigrations([sql]);
+    const col = schema.tables.get('some_table')?.columns.get('status');
+    expect(col?.notNull).toBe(true);
+    expect(col?.hasDefault).toBe(false);
+  });
+
+  it('is still required on insert - not silently satisfied by a phantom default', () => {
+    const schema = parseMigrations([sql]);
+    expect(() => assertWritable('some_table', {}, schema, 'insert')).toThrow(/status/);
+  });
+
+  it('a real DEFAULT clause is still recognised', () => {
+    const withRealDefault = `
+      create table if not exists public.some_table (
+        status text not null default 'default' check (status in ('default','other'))
+      );
+    `;
+    const schema = parseMigrations([withRealDefault]);
+    const col = schema.tables.get('some_table')?.columns.get('status');
+    expect(col?.hasDefault).toBe(true);
   });
 });
 
@@ -242,10 +359,31 @@ describe('pendingMigrationColumns - drift information, not a failure', () => {
   // repo's migrations define columns ZAO OS's live database doesn't have
   // yet) is real and worth stating plainly, so pendingMigrationColumns()
   // reports it instead of hiding it.
-  it('reports fractal_sessions.meeting_number as pending', () => {
+  it('reports whatever it finds, without asserting a specific column stays pending', () => {
+    // fractal_sessions.meeting_number is pending ONLY because this repo's
+    // migrations have never been applied to the live ZAO OS database - the
+    // single open blocker for this whole project. The moment someone applies
+    // 0005 and refreshes the snapshot, this list becomes []. Hard-coding
+    // today's pending column here means the person who does the CORRECT
+    // thing (applies the migration, refreshes the fixture) gets a red suite
+    // - an arrayContaining diff against an empty array - that explains
+    // nothing. pendingMigrationColumns' own doc comment says a test
+    // surfacing this list "should report what it finds, not throw", so this
+    // asserts only the shape (must pass whether the list is empty or not)
+    // and reports the contents via console.info, the same pattern
+    // tableCoverage.test.ts uses for its own visibility-not-enforcement
+    // check.
     const pending = pendingMigrationColumns();
-    expect(pending).toEqual(
-      expect.arrayContaining([{ table: 'fractal_sessions', column: 'meeting_number' }]),
+    expect(Array.isArray(pending)).toBe(true);
+    for (const item of pending) {
+      expect(item).toEqual(
+        expect.objectContaining({ table: expect.any(String), column: expect.any(String) }),
+      );
+    }
+    // eslint-disable-next-line no-console
+    console.info(
+      `pendingMigrationColumns: ${pending.length} column(s) pending ` +
+        `(${pending.map((p) => `${p.table}.${p.column}`).sort().join(', ') || 'none'})`,
     );
   });
 
@@ -271,9 +409,10 @@ describe('zaoos-schema.json must be re-verified before it goes stale', () => {
         `src/lib/testing/zaoos-schema.json is stale: its recheckBy date ` +
           `(${provenance.recheckBy}) has passed. Re-run ` +
           `scripts/refresh-zaoos-schema.mjs against the ZAO OS project and commit ` +
-          `the refreshed fixture.`,
+          `the refreshed fixture. That script needs ZAO OS credentials ` +
+          `(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) - if you don't have them, this is not ` +
+          `something you can clear yourself; hand it to someone who does.`,
       );
     }
-    expect(now.getTime()).toBeLessThanOrEqual(recheckBy.getTime());
   });
 });

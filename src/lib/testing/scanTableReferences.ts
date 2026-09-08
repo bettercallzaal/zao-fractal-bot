@@ -8,10 +8,20 @@
 // typo'd name, or a table nobody wrote a test for goes completely
 // unguarded and reads exactly like covered code. See tableCoverage.test.ts.
 //
-// Scans src/**/*.ts, excluding *.test.ts files AND all of src/lib/testing/
-// (this file's own directory) - that directory is test infrastructure, not
+// Scans **/*.ts under each of the given root directories - default ['src',
+// 'web'], excluding *.test.ts files AND, for the src root, all of
+// src/lib/testing/ (this file's own directory - test infrastructure, not
 // product code, and nothing in it writes to Supabase in production, so
-// excluding it creates no blind spot for a real write.
+// excluding it creates no blind spot for a real write).
+//
+// This repo is three workspaces (root/src, packages/shared, web), and this
+// scanner is one workspace wide by default for a reason that used to be a
+// live bug: a rootDir of just 'src' misses every Supabase call in web/lib -
+// including web/lib/getWalletRegistry.ts and web/lib/resolveMemberIdentity.ts,
+// which query a `wallets` table that does not exist (see
+// TABLE_COVERAGE_EXCEPTIONS in tableCoverage.test.ts). packages/shared is not
+// included because it does not import @supabase/supabase-js or call
+// `.from(...)` at all - nothing there needs scanning.
 //
 // Design choice: this collects EVERY `.from('table')` call, not just ones
 // followed by `.insert`/`.upsert`/`.update`. Reliably distinguishing a read
@@ -51,12 +61,19 @@ export interface TableScanResult {
 // convention anyone has to remember to follow while editing files in here.
 const EXCLUDED_DIR_SUFFIX = path.join('lib', 'testing');
 
+// Directories that are never product source regardless of which workspace
+// root is being scanned - dependency trees and build output. Neither
+// currently holds real .ts files in this repo's workspaces, but a scanner
+// walking web/ must not depend on that staying true.
+const SKIP_DIR_NAMES = new Set(['node_modules', '.next']);
+
 function listSourceFiles(rootDir: string): string[] {
   const out: string[] = [];
   const excludedDir = path.join(rootDir, EXCLUDED_DIR_SUFFIX);
   const walk = (dir: string): void => {
     if (dir === excludedDir) return;
     for (const entry of readdirSync(dir)) {
+      if (SKIP_DIR_NAMES.has(entry)) continue;
       const full = path.join(dir, entry);
       const stat = statSync(full);
       if (stat.isDirectory()) {
@@ -127,35 +144,43 @@ function findFromCalls(src: string): Array<{ precedingIdentifier: string; arg: s
 
 const QUOTED_IDENTIFIER = /^(['"`])([A-Za-z_][A-Za-z0-9_]*)\1$/;
 
-/** Scans every non-test *.ts file under `rootDir` for Supabase table
- * references, skipping src/lib/testing/ (test infrastructure). See the file
- * doc comment for why this collects all `.from('table')` calls rather than
- * trying to isolate writes. */
-export function scanTableReferences(rootDir = 'src'): TableScanResult {
-  const files = listSourceFiles(rootDir);
+/** Scans every non-test *.ts file under each of `rootDirs` for Supabase table
+ * references, skipping src/lib/testing/ (test infrastructure) under the src
+ * root. Defaults to every workspace that actually calls Supabase - see the
+ * file doc comment for why that is ['src', 'web'] and not just 'src', and
+ * for why this collects all `.from('table')` calls rather than trying to
+ * isolate writes. */
+export function scanTableReferences(rootDirs: string[] = ['src', 'web']): TableScanResult {
   const tables = new Set<string>();
   const unresolvedSamples: string[] = [];
   let unresolvedCount = 0;
+  let filesScanned = 0;
 
-  for (const file of files) {
-    const src = stripComments(readFileSync(file, 'utf8'));
-    for (const { precedingIdentifier, arg } of findFromCalls(src)) {
-      // `Array.from({ length }, ...)` / `Array.from(iterable)` is JavaScript's
-      // Array.from, not a Supabase query - it is not a table reference at
-      // all, resolved or otherwise, and must not be counted as either.
-      if (precedingIdentifier === 'Array') continue;
+  for (const rootDir of rootDirs) {
+    const files = listSourceFiles(rootDir);
+    filesScanned += files.length;
 
-      const quoted = arg.match(QUOTED_IDENTIFIER);
-      if (quoted) {
-        tables.add(quoted[2]);
-        continue;
-      }
-      unresolvedCount++;
-      if (unresolvedSamples.length < 10) {
-        unresolvedSamples.push(`${path.relative(process.cwd(), file)}: .from(${arg})`);
+    for (const file of files) {
+      const src = stripComments(readFileSync(file, 'utf8'));
+      for (const { precedingIdentifier, arg } of findFromCalls(src)) {
+        // `Array.from({ length }, ...)` / `Array.from(iterable)` is
+        // JavaScript's Array.from, not a Supabase query - it is not a table
+        // reference at all, resolved or otherwise, and must not be counted
+        // as either.
+        if (precedingIdentifier === 'Array') continue;
+
+        const quoted = arg.match(QUOTED_IDENTIFIER);
+        if (quoted) {
+          tables.add(quoted[2]);
+          continue;
+        }
+        unresolvedCount++;
+        if (unresolvedSamples.length < 10) {
+          unresolvedSamples.push(`${path.relative(process.cwd(), file)}: .from(${arg})`);
+        }
       }
     }
   }
 
-  return { tables, filesScanned: files.length, unresolvedCount, unresolvedSamples };
+  return { tables, filesScanned, unresolvedCount, unresolvedSamples };
 }

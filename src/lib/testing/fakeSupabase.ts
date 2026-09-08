@@ -5,6 +5,15 @@
 // fake instead of each hand-rolling (and potentially under-guarding) their
 // own. See assertWritable.ts and schemaFromMigrations.ts for what "guarded"
 // means and why it exists.
+//
+// Importing this fake instead of hand-rolling a `{ from: () => ({ insert: ...
+// }) }` stub is load-bearing, not a style preference: a hand-rolled fake is
+// silently unguarded (it accepts any payload, exactly the bug this whole
+// effort exists to catch), and tableCoverage.test.ts cannot catch that for
+// you - it checks that tables are known to the schema guard, not that a
+// given test file's fake actually calls the guard. See
+// web/lib/dispatchCommand.test.ts for a real, unfixed example of this exact
+// gap: it hand-rolls its own ungated fake that inserts into `bot_commands`.
 
 import { assertWritable } from './assertWritable.js';
 import { buildSchema, type SchemaModel } from './schemaFromMigrations.js';

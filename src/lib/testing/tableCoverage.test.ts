@@ -25,12 +25,29 @@ export interface TableCoverageException {
 }
 
 // Tables the static scan may find that are deliberately NOT expected to be
-// known to the schema guard. Empty today - every table src/**/*.ts refers to
-// is defined by a migration or present in the ZAO OS snapshot. Add an entry
-// here only for a considered reason (e.g. a table owned by an unrelated
-// project that this repo only ever reads, and will never write to); do not
-// add one just to silence a failure without addressing it.
-export const TABLE_COVERAGE_EXCEPTIONS: readonly TableCoverageException[] = [];
+// known to the schema guard. Add an entry here only for a considered reason
+// (e.g. a table owned by an unrelated project that this repo only ever
+// reads, and will never write to); do not add one just to silence a failure
+// without addressing it.
+export const TABLE_COVERAGE_EXCEPTIONS: readonly TableCoverageException[] = [
+  {
+    table: 'wallets',
+    reason:
+      'Live code queries a table that does not exist. web/lib/getWalletRegistry.ts:9 and ' +
+      "web/lib/resolveMemberIdentity.ts:23,37 call .from('wallets') via " +
+      'web/lib/supabaseClient.ts, which reads the same SUPABASE_URL as the bot. But MEASURED ' +
+      '2026-09-01 against the ZAO OS project (efsxtoxvigqowjhgcbiz): wallets returns 404 ' +
+      'PGRST205 and never existed - see src/commands/executeCommand.test.ts:233, a test that ' +
+      "exists specifically to keep this repo's own bridgeIdentities action away from that same " +
+      'table. This is not a schema-guard gap to close by adding a migration or a snapshot entry ' +
+      '- that would make the guard silently agree that a nonexistent table is fine to write to. ' +
+      'It is a live bug in web/lib that belongs in front of a human: either those two call sites ' +
+      'are dead code that should be deleted, or a wallets table needs to be created for real. ' +
+      "This exception documents the finding; it does not resolve it. (Separately, " +
+      'web/lib/dispatchCommand.test.ts:10-22 hand-rolls its own ungated Supabase fake that ' +
+      "inserts into bot_commands, bypassing this guard entirely - not fixed here.)",
+  },
+];
 
 describe('every Supabase table this codebase refers to is known to the schema guard', () => {
   it('has a migration, a ZAO OS snapshot entry, or a documented exception for each table', () => {
@@ -79,7 +96,15 @@ describe('every Supabase table this codebase refers to is known to the schema gu
     );
   });
 
-  it('starts with no exceptions - every table found today is genuinely known', () => {
-    expect(TABLE_COVERAGE_EXCEPTIONS).toEqual([]);
+  it('has exactly the documented exceptions - each is a considered decision, not a quiet skip', () => {
+    // Every exception here must be a real, named finding with a reason, not
+    // a rubber-stamped skip - so this pins the exact set of tables and
+    // requires a substantial reason for each, rather than just checking the
+    // list is non-empty. Adding a table here should mean editing this
+    // assertion too, keeping the decision visible in the diff.
+    expect(TABLE_COVERAGE_EXCEPTIONS.map((e) => e.table)).toEqual(['wallets']);
+    for (const exception of TABLE_COVERAGE_EXCEPTIONS) {
+      expect(exception.reason.length).toBeGreaterThan(20);
+    }
   });
 });
