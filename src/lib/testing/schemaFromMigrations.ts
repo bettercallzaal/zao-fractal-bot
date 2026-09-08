@@ -127,7 +127,11 @@ function parseColumnSegment(segment: string): ColumnSchema | null {
 
   const stopAt = rest.search(COLUMN_STOP_WORDS);
   const type = (stopAt === -1 ? rest : rest.slice(0, stopAt)).trim();
-  const notNull = /not\s+null/i.test(rest);
+  // Postgres makes every primary key column NOT NULL implicitly, whether or
+  // not the migration also spells out `not null` - `bot_name text primary
+  // key` (0003_awareness.sql) never says "not null" but is exactly as
+  // required as if it did.
+  const notNull = /not\s+null/i.test(rest) || /\bprimary\s+key\b/i.test(rest);
   const hasDefault = /\bdefault\b/i.test(rest);
   const inlineCheck = parseInlineCheck(segment);
 
@@ -138,6 +142,36 @@ function parseColumnSegment(segment: string): ColumnSchema | null {
     hasDefault,
     checkValues: inlineCheck && inlineCheck.column === name ? inlineCheck.values : undefined,
   };
+}
+
+// Only `check (<col> in (<list>))` is understood. A CHECK written any other
+// way (a range like `check (level between 1 and 6)`, `check (col = ANY(...))`,
+// a multi-column expression, ...) must not be silently treated as "no
+// constraint" - that is the same "mock that accepts anything" failure this
+// whole guard exists to prevent, just moved one level down from "any
+// payload" to "any CHECK shape the parser happens to recognise". So this
+// scans every `check (...)` in a migration - inline column checks, ALTER ...
+// ADD CONSTRAINT ... CHECK, and anything inside a `do $$ ... $$` block, since
+// it works on raw text rather than a dollar-quote-aware parser - and throws
+// the moment one doesn't fit the recognised shape, naming the migration file
+// and the offending fragment so the gap is a red test, not a silent one.
+function assertOnlyKnownCheckShapes(sql: string, fileLabel: string): void {
+  const re = /\bcheck\b\s*\(/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(sql))) {
+    const openIndex = match.index + match[0].length - 1;
+    const closeIndex = findMatchingParen(sql, openIndex);
+    const inner = sql.slice(openIndex + 1, closeIndex);
+    if (!/^\s*\w+\s+in\s*\([^()]*\)\s*$/i.test(inner)) {
+      throw new Error(
+        `schemaFromMigrations: ${fileLabel} has a CHECK constraint this parser does not ` +
+          `recognise: check (${inner.trim()}). Only "check (<col> in (<list>))" is understood - ` +
+          `teach assertOnlyKnownCheckShapes/parseInlineCheck this shape before assertWritable can ` +
+          `be trusted to enforce it. Silently leaving the column unconstrained would recreate the ` +
+          `exact "mock that accepts anything" bug this guard exists to catch.`,
+      );
+    }
+  }
 }
 
 function applyCreateTables(sql: string, model: SchemaModel): void {
@@ -174,7 +208,7 @@ function applyAddColumns(sql: string, model: SchemaModel): void {
     table.columns.set(colName, {
       name: colName,
       type,
-      notNull: /not\s+null/i.test(rest),
+      notNull: /not\s+null/i.test(rest) || /\bprimary\s+key\b/i.test(rest),
       hasDefault: /\bdefault\b/i.test(rest),
     });
   }
@@ -202,15 +236,21 @@ function applyAddedChecks(sql: string, model: SchemaModel): void {
 /** Builds a schema model from raw migration SQL, applied in the given order.
  * Later constraint changes win over earlier ones for the same column - this
  * is what lets a test build "schema as of migration N" by passing a prefix
- * of the full list. */
-export function parseMigrations(sqlTexts: string[]): SchemaModel {
+ * of the full list.
+ *
+ * `fileLabels`, if given, names each entry of `sqlTexts` for error messages
+ * (an unrecognised CHECK shape names the file it came from). Defaults to a
+ * positional label when omitted, since most callers only have the text. */
+export function parseMigrations(sqlTexts: string[], fileLabels: string[] = []): SchemaModel {
   const model: SchemaModel = { tables: new Map() };
-  for (const raw of sqlTexts) {
+  sqlTexts.forEach((raw, i) => {
+    const label = fileLabels[i] ?? `migration[${i}]`;
     const sql = stripLineComments(raw);
+    assertOnlyKnownCheckShapes(sql, label);
     applyCreateTables(sql, model);
     applyAddColumns(sql, model);
     applyAddedChecks(sql, model);
-  }
+  });
   return model;
 }
 
@@ -221,5 +261,5 @@ export function buildSchema(migrationsDir = 'supabase/migrations'): SchemaModel 
     .filter((f) => f.endsWith('.sql'))
     .sort();
   const sqlTexts = files.map((f) => readFileSync(path.join(migrationsDir, f), 'utf8'));
-  return parseMigrations(sqlTexts);
+  return parseMigrations(sqlTexts, files);
 }
