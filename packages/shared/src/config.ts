@@ -18,5 +18,19 @@ export const RESPECT_POINTS = [110, 68, 42, 26, 16, 10] as const;
 export const MAX_GROUP_MEMBERS = 6;
 export const MIN_GROUP_MEMBERS = 2;
 
+/** How few voters can rank an absent person. Distinct from MIN_GROUP_MEMBERS,
+ * which is how few people can play at all - do not collapse them.
+ *
+ * Three is the smallest number that is actually a vote. At 1 it is a decree;
+ * at 2 a strict majority is 2, so it is unanimity and any disagreement
+ * deadlocks under the no-tie-break rule. At 3 the threshold is 2, a real
+ * majority that survives one dissent. Spec 2026-09-02 section 3.2. */
+export const MIN_VOTERS = 3;
+
+/** A submission counts if it landed within this many hours before the
+ * session's start. Compared against session start, not wall clock, so the
+ * window does not drift while a fractal runs. Spec section 5. */
+export const ASYNC_WINDOW_HOURS = 12;
+
 export const STARTING_LEVEL = 6;
 export const ENDING_LEVEL = 1;
