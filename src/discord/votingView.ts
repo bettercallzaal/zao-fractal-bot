@@ -21,21 +21,36 @@ export function parseVoteButtonId(
   return { threadId: parts[1], candidateDiscordId: parts[2] };
 }
 
-/** Discord allows at most 5 buttons per row and 5 rows. A fractal group is
- * capped at 6 members (MAX_GROUP_MEMBERS), so two rows always suffice. */
+/** Discord allows at most 5 buttons per row and 5 rows. A group is capped at 6
+ * candidates including async entrants (MAX_GROUP_MEMBERS), so two rows always
+ * suffice.
+ *
+ * Async entrants are marked twice over - a suffix and a different style -
+ * because a voter picking between names has no other way to know that one of
+ * them is not in the room. Spec 2026-09-02 section 7. */
 export function buildVotingRows(
   threadId: string,
   candidates: Participant[],
+  asyncEntrantIds: readonly string[] = [],
 ): ActionRowBuilder<ButtonBuilder>[] {
+  const isAsync = new Set(asyncEntrantIds);
+  const SUFFIX = ' (async)';
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+
   for (let i = 0; i < candidates.length; i += 5) {
     const row = new ActionRowBuilder<ButtonBuilder>();
     for (const c of candidates.slice(i, i + 5)) {
+      const async = isAsync.has(c.discordId);
+      // Trim the name, not the marker: an 80-character name must not push
+      // "(async)" off the end of the label.
+      const label = async
+        ? c.displayName.slice(0, 80 - SUFFIX.length) + SUFFIX
+        : c.displayName.slice(0, 80);
       row.addComponents(
         new ButtonBuilder()
           .setCustomId(voteButtonId(threadId, c.discordId))
-          .setLabel(c.displayName.slice(0, 80))
-          .setStyle(ButtonStyle.Primary),
+          .setLabel(label)
+          .setStyle(async ? ButtonStyle.Secondary : ButtonStyle.Primary),
       );
     }
     rows.push(row);

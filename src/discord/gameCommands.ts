@@ -11,7 +11,7 @@ import {
   SlashCommandBuilder,
 } from 'discord.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { activeCandidates, type GameState, type Participant } from '../game/session.js';
+import { activeCandidates, voters, type GameState, type Participant } from '../game/session.js';
 import { castFractalVote, startFractal } from '../commands/respectGame.js';
 import { loadSessionByThread } from '../lib/gameRepo.js';
 import { buildVotingRows, parseVoteButtonId } from './votingView.js';
@@ -32,10 +32,18 @@ export const startCommand = new SlashCommandBuilder()
   );
 
 function votingPrompt(state: GameState, awaiting: number): string {
+  // voters(state), not participants: with 4 present and 2 async this used to
+  // read "all 6 have voted" while the round resolved at 4.
+  const voterCount = voters(state).length;
+  const asyncCount = state.asyncEntrantIds.length;
+  const asyncNote =
+    asyncCount > 0
+      ? ` ${asyncCount} async ${asyncCount === 1 ? 'entrant is' : 'entrants are'} ranked but do not vote.`
+      : '';
   return (
     `Level ${state.currentLevel}. Pick who contributed most.\n` +
-    `The round resolves once all ${state.participants.length} have voted ` +
-    `and someone has a majority. ${awaiting} still to vote.`
+    `The round resolves once all ${voterCount} present have voted ` +
+    `and someone has a majority. ${awaiting} still to vote.${asyncNote}`
   );
 }
 
@@ -84,8 +92,12 @@ async function handleStart(
         `${started.votesNeeded} votes to take a level.`,
     );
     await channel.send({
-      content: votingPrompt(started.state, participants.length),
-      components: buildVotingRows(channel.id, activeCandidates(started.state)),
+      content: votingPrompt(started.state, voters(started.state).length),
+      components: buildVotingRows(
+        channel.id,
+        activeCandidates(started.state),
+        started.state.asyncEntrantIds,
+      ),
     });
   } catch (err) {
     // A failed write must be visible, not swallowed. This message existing at
@@ -189,8 +201,12 @@ async function handleVote(
       await channel.send({
         content:
           `Level ${out.state.currentLevel + 1}: <@${out.roundWinnerId}>.\n\n` +
-          votingPrompt(out.state, out.state.participants.length),
-        components: buildVotingRows(parsed.threadId, activeCandidates(out.state)),
+          votingPrompt(out.state, voters(out.state).length),
+        components: buildVotingRows(
+          parsed.threadId,
+          activeCandidates(out.state),
+          out.state.asyncEntrantIds,
+        ),
       });
     }
   } catch (err) {
