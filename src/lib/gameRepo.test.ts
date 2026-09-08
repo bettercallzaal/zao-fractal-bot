@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { completeSession, createSession, loadSessionByThread, recordVote } from './gameRepo.js';
 import { startSession } from '../game/session.js';
@@ -125,6 +126,38 @@ describe('createSession', () => {
         facilitatorDiscordId: 'u1',
       }),
     ).rejects.toThrow(/simulated/);
+  });
+});
+
+describe('discord_roster confidence', () => {
+  it('inserts a confidence value the schema actually permits', async () => {
+    const sb = fakeSupabase({ results: sessionInsertOk });
+    await createSession(sb as never, {
+      state,
+      name: 'ZAO Fractal 92 - Group 1',
+      guildId: 'g1',
+      facilitatorDiscordId: 'u1',
+    });
+
+    const rosterRows = sb.calls.find((c) => c.table === 'discord_roster')?.payload as {
+      confidence: string;
+    }[];
+
+    // The allowed set is read from the migrations rather than duplicated here,
+    // so widening or narrowing the constraint moves this test with it.
+    const sql = ['0002_discord_roster', '0006_async_participation']
+      .map((f) => readFileSync(`supabase/migrations/${f}.sql`, 'utf8'))
+      .join('\n');
+    const lastCheck = [...sql.matchAll(/confidence in \(([^)]+)\)/g)].pop();
+    if (!lastCheck) throw new Error('no confidence check constraint found in migrations');
+    const allowed = new Set(
+      lastCheck[1].split(',').map((s) => s.trim().replace(/^'|'$/g, '')),
+    );
+
+    expect(rosterRows.length).toBeGreaterThan(0);
+    for (const row of rosterRows) {
+      expect(allowed.has(row.confidence)).toBe(true);
+    }
   });
 });
 
