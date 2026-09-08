@@ -9,7 +9,13 @@
 // arise and there is nothing to break. A split group does not resolve until
 // somebody changes their mind, which is the intent rather than a deadlock.
 
-import { MIN_GROUP_MEMBERS, RESPECT_POINTS, STARTING_LEVEL } from '@fractalbot/shared';
+import {
+  MAX_GROUP_MEMBERS,
+  MIN_GROUP_MEMBERS,
+  MIN_VOTERS,
+  RESPECT_POINTS,
+  STARTING_LEVEL,
+} from '@fractalbot/shared';
 import { findRoundWinner, majorityThreshold } from '../lib/voteThreshold.js';
 
 export interface Participant {
@@ -31,7 +37,13 @@ export interface GameState {
   groupNumber: string;
   status: SessionStatus;
   currentLevel: number;
+  /** Every candidate: the room plus the async entrants. */
   participants: Participant[];
+  /** The subset of `participants` who submitted async. They are ranked like
+   * anyone else and never vote - spec 2026-09-02 section 2. Derivation runs
+   * this way round, rather than holding two lists, because section 9 requires
+   * the existing 16 tests to pass unmodified. */
+  asyncEntrantIds: string[];
   winners: LevelWinner[];
   /** voterDiscordId -> candidateDiscordId, current round only. */
   votes: Record<string, string>;
@@ -63,12 +75,47 @@ export function startSession(input: {
   meetingNumber: number;
   groupNumber: string;
   participants: Participant[];
+  asyncEntrantIds?: string[];
 }): GameState {
+  const asyncEntrantIds = input.asyncEntrantIds ?? [];
+
   if (input.participants.length < MIN_GROUP_MEMBERS) {
     throw new RangeError(
       `A fractal needs at least ${MIN_GROUP_MEMBERS} members, got ${input.participants.length}`,
     );
   }
+
+  // RESPECT_POINTS has exactly MAX_GROUP_MEMBERS entries and finalRanking pays
+  // RESPECT_POINTS[index] ?? 0, so a seventh candidate would silently earn
+  // nothing. Fail loudly instead. The seating layer also caps this; both are
+  // wanted, because this is the last line before a real payout.
+  if (input.participants.length > MAX_GROUP_MEMBERS) {
+    throw new RangeError(
+      `A fractal group holds at most ${MAX_GROUP_MEMBERS} candidates including async entrants, got ${input.participants.length}`,
+    );
+  }
+
+  const ids = new Set(input.participants.map((p) => p.discordId));
+  for (const id of asyncEntrantIds) {
+    if (!ids.has(id)) {
+      throw new RangeError(`asyncEntrantIds: ${id} is not a participant`);
+    }
+  }
+
+  // The floor guards the VOTER count, not the candidate count. Without this,
+  // one voter plus five async entrants gives a votesNeeded of 1 - one person
+  // unilaterally ranking five absent people. Spec section 3.2. Derived the
+  // same way voters() is - counting participants not in the async set -
+  // rather than by subtracting lengths, so a duplicated id in
+  // asyncEntrantIds cannot make this guard disagree with voters().
+  const asyncIdSet = new Set(asyncEntrantIds);
+  const voterCount = input.participants.filter((p) => !asyncIdSet.has(p.discordId)).length;
+  if (asyncEntrantIds.length > 0 && voterCount < MIN_VOTERS) {
+    throw new RangeError(
+      `A fractal with async entrants needs at least ${MIN_VOTERS} voters, got ${voterCount}`,
+    );
+  }
+
   return {
     threadId: input.threadId,
     meetingNumber: input.meetingNumber,
@@ -76,9 +123,23 @@ export function startSession(input: {
     status: 'active',
     currentLevel: STARTING_LEVEL,
     participants: input.participants,
+    asyncEntrantIds,
     winners: [],
     votes: {},
   };
+}
+
+/** Present in the room. The only people whose votes count and the only people
+ * a round waits for. */
+export function voters(state: GameState): Participant[] {
+  const isAsync = new Set(state.asyncEntrantIds);
+  return state.participants.filter((p) => !isAsync.has(p.discordId));
+}
+
+/** Ranked without attending. Votable-for, never voted-with. */
+export function asyncEntrants(state: GameState): Participant[] {
+  const isAsync = new Set(state.asyncEntrantIds);
+  return state.participants.filter((p) => isAsync.has(p.discordId));
 }
 
 export function activeCandidates(state: GameState): Participant[] {
@@ -86,15 +147,20 @@ export function activeCandidates(state: GameState): Participant[] {
   return state.participants.filter((p) => !won.has(p.discordId));
 }
 
-/** Strict majority of the FULL group. Everyone votes every round, including
- * members who already hold a level, so the bar does not fall as the candidate
- * pool shrinks. */
+/** Strict majority of the VOTERS - everyone present, including members who
+ * already hold a level, so the bar does not fall as the candidate pool
+ * shrinks. Async entrants are excluded: counting them would raise the
+ * threshold using people who cannot cast a vote, and every round they touched
+ * would deadlock. That is the failure already recorded as the passing test
+ * "known limitation: a silent member blocks the round". */
 export function votesNeeded(state: GameState): number {
-  return majorityThreshold(state.participants.length);
+  return majorityThreshold(voters(state).length);
 }
 
 export function awaitingVoters(state: GameState): string[] {
-  return state.participants.filter((p) => !(p.discordId in state.votes)).map((p) => p.discordId);
+  return voters(state)
+    .filter((p) => !(p.discordId in state.votes))
+    .map((p) => p.discordId);
 }
 
 export function castVote(state: GameState, voterId: string, candidateId: string): VoteOutcome {
@@ -109,7 +175,7 @@ export function castVote(state: GameState, voterId: string, candidateId: string)
   });
 
   if (state.status !== 'active') return unchanged('session_not_active');
-  if (!state.participants.some((p) => p.discordId === voterId)) return unchanged('not_participant');
+  if (!voters(state).some((p) => p.discordId === voterId)) return unchanged('not_participant');
   if (!activeCandidates(state).some((p) => p.discordId === candidateId)) {
     return unchanged('not_candidate');
   }
@@ -132,13 +198,20 @@ export function castVote(state: GameState, voterId: string, candidateId: string)
   }
 
   const tally = new Map<string, number>();
-  for (const choice of Object.values(votes)) {
+  // Iterate voters rather than the votes map. The denominator on the next line
+  // is the voter count, so a ballot from anyone who is not a voter would be
+  // counted in the numerator and not in the denominator - a candidate could
+  // clear the threshold on a ghost vote. castVote cannot currently insert such
+  // a key, but a rehydrated session could carry one.
+  for (const v of voters(voted)) {
+    const choice = votes[v.discordId];
+    if (choice === undefined) continue;
     tally.set(choice, (tally.get(choice) ?? 0) + 1);
   }
 
   // A strict majority means at most one candidate can clear, so this is the
   // winner or there is none. No tie is representable.
-  const winnerId = findRoundWinner(tally, state.participants.length);
+  const winnerId = findRoundWinner(tally, voters(state).length);
   if (!winnerId) {
     return {
       state: voted,

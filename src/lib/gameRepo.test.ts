@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { completeSession, createSession, loadSessionByThread, recordVote } from './gameRepo.js';
-import { startSession } from '../game/session.js';
+import { startSession, votesNeeded } from '../game/session.js';
 
 interface Call {
   table: string;
@@ -128,6 +129,38 @@ describe('createSession', () => {
   });
 });
 
+describe('discord_roster confidence', () => {
+  it('inserts a confidence value the schema actually permits', async () => {
+    const sb = fakeSupabase({ results: sessionInsertOk });
+    await createSession(sb as never, {
+      state,
+      name: 'ZAO Fractal 92 - Group 1',
+      guildId: 'g1',
+      facilitatorDiscordId: 'u1',
+    });
+
+    const rosterRows = sb.calls.find((c) => c.table === 'discord_roster')?.payload as {
+      confidence: string;
+    }[];
+
+    // The allowed set is read from the migrations rather than duplicated here,
+    // so widening or narrowing the constraint moves this test with it.
+    const sql = ['0002_discord_roster', '0006_async_participation']
+      .map((f) => readFileSync(`supabase/migrations/${f}.sql`, 'utf8'))
+      .join('\n');
+    const lastCheck = [...sql.matchAll(/confidence in \(([^)]+)\)/g)].pop();
+    if (!lastCheck) throw new Error('no confidence check constraint found in migrations');
+    const allowed = new Set(
+      lastCheck[1].split(',').map((s) => s.trim().replace(/^'|'$/g, '')),
+    );
+
+    expect(rosterRows.length).toBeGreaterThan(0);
+    for (const row of rosterRows) {
+      expect(allowed.has(row.confidence)).toBe(true);
+    }
+  });
+});
+
 describe('recordVote', () => {
   it('upserts so a changed vote replaces rather than duplicates', async () => {
     const sb = fakeSupabase({
@@ -192,6 +225,79 @@ describe('completeSession', () => {
   });
 });
 
+describe('async membership survives a restart', () => {
+  it('createSession marks async entrants on their roster rows', async () => {
+    const sb = fakeSupabase({ results: sessionInsertOk });
+    const asyncState = startSession({
+      threadId: 't1',
+      meetingNumber: 92,
+      groupNumber: '1',
+      participants: ['v1', 'v2', 'v3', 'a1'].map((id) => ({
+        discordId: id,
+        displayName: id,
+        wallet: null,
+      })),
+      asyncEntrantIds: ['a1'],
+    });
+
+    await createSession(sb as never, {
+      state: asyncState,
+      name: 'ZAO Fractal 92 - Group 1',
+      guildId: 'g1',
+      facilitatorDiscordId: 'f1',
+    });
+
+    const rows = sb.calls.find((c) => c.table === 'discord_roster')?.payload as {
+      discord_id: string;
+      is_async: boolean;
+    }[];
+    expect(rows.find((r) => r.discord_id === 'a1')?.is_async).toBe(true);
+    expect(rows.find((r) => r.discord_id === 'v1')?.is_async).toBe(false);
+  });
+
+  it('loadSessionByThread rehydrates asyncEntrantIds', async () => {
+    const sb = fakeSupabase({
+      results: {
+        'fractal_sessions.select': {
+          data: {
+            id: 's1',
+            meeting_number: 92,
+            group_number: '1',
+            thread_id: 't1',
+            status: 'active',
+          },
+          error: null,
+        },
+        'discord_roster.select': {
+          data: [
+            { discord_id: 'v1', display_name: 'v1', wallet_address: null, is_async: false },
+            { discord_id: 'v2', display_name: 'v2', wallet_address: null, is_async: false },
+            { discord_id: 'v3', display_name: 'v3', wallet_address: null, is_async: false },
+            { discord_id: 'a1', display_name: 'a1', wallet_address: null, is_async: true },
+          ],
+          error: null,
+        },
+        'discord_fractal_rounds.select': { data: [], error: null },
+      },
+    });
+
+    const loaded = await loadSessionByThread(sb as never, 't1');
+
+    expect(loaded?.state.asyncEntrantIds).toEqual(['a1']);
+    // The point of the test: the threshold is unchanged by the restart.
+    expect(votesNeeded(loaded!.state)).toBe(2);
+
+    // The mock returns seeded data regardless of the columns asked for, so
+    // without this the test would still pass if `is_async` were dropped from
+    // the real query - and every restored session would silently come back
+    // all-voters. Assert on what was REQUESTED, not just what came back.
+    const rosterSelect = sb.calls.find(
+      (c) => c.table === 'discord_roster' && c.op === 'select',
+    )?.payload as string | undefined;
+    expect(rosterSelect).toContain('is_async');
+  });
+});
+
 describe('loadSessionByThread', () => {
   it('returns null when the thread has no session', async () => {
     const sb = fakeSupabase({ results: { 'fractal_sessions.select': { data: null, error: null } } });
@@ -242,5 +348,66 @@ describe('loadSessionByThread', () => {
     expect(restored?.state.currentLevel).toBe(5);
     expect(restored?.state.votes).toEqual({ u1: 'u3' });
     expect(restored?.state.meetingNumber).toBe(111);
+  });
+});
+
+describe('loadSessionByThread - restored roster guards', () => {
+  // captureRoster (executeCommand.ts) deletes every discord_roster row for a
+  // session_id and replaces it with a presence snapshot. Aimed at a live
+  // fractal's session id, that would swap the game roster for an
+  // arbitrary-sized one underneath a running game. loadSessionByThread builds
+  // GameState directly from these rows - bypassing startSession, so none of
+  // its guards run - and finalRanking pays RESPECT_POINTS[6] ?? 0 for a
+  // seventh candidate: zero Respect, silently. These two guards make that
+  // branch fail loudly instead.
+
+  const sessionRow = (id: string) => ({
+    'fractal_sessions.select': {
+      data: { id, meeting_number: 1, group_number: '1', thread_id: 't1', status: 'active' },
+      error: null,
+    },
+  });
+
+  it('throws when the restored roster holds more than MAX_GROUP_MEMBERS candidates', async () => {
+    const rows = Array.from({ length: 7 }, (_, i) => ({
+      discord_id: `u${i + 1}`,
+      display_name: `u${i + 1}`,
+      wallet_address: null,
+      is_async: false,
+    }));
+    const sb = fakeSupabase({
+      results: {
+        ...sessionRow('sess-big'),
+        'discord_roster.select': { data: rows, error: null },
+        'discord_fractal_rounds.select': { data: [], error: null },
+      },
+    });
+
+    await expect(loadSessionByThread(sb as never, 't1')).rejects.toThrow(RangeError);
+    await expect(loadSessionByThread(sb as never, 't1')).rejects.toThrow(/sess-big/);
+  });
+
+  it('throws when a roster row is_async but has no place among the restored participants', async () => {
+    // discord_id is nullable on discord_roster (0002: "null for manual
+    // name-only entries"). A row with no discord_id cannot be a Participant,
+    // so it is dropped when the participant list is built - but if that same
+    // row is flagged is_async, the flag now points at nobody. That mismatch
+    // is exactly the kind of roster corruption these guards exist to catch.
+    const rows = [
+      { discord_id: 'v1', display_name: 'v1', wallet_address: null, is_async: false },
+      { discord_id: 'v2', display_name: 'v2', wallet_address: null, is_async: false },
+      { discord_id: 'v3', display_name: 'v3', wallet_address: null, is_async: false },
+      { discord_id: null, display_name: 'ghost', wallet_address: null, is_async: true },
+    ];
+    const sb = fakeSupabase({
+      results: {
+        ...sessionRow('sess-ghost'),
+        'discord_roster.select': { data: rows, error: null },
+        'discord_fractal_rounds.select': { data: [], error: null },
+      },
+    });
+
+    await expect(loadSessionByThread(sb as never, 't1')).rejects.toThrow(RangeError);
+    await expect(loadSessionByThread(sb as never, 't1')).rejects.toThrow(/sess-ghost/);
   });
 });

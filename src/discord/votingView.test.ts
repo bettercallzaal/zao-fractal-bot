@@ -37,3 +37,48 @@ describe('vote button ids', () => {
     expect(label.length).toBe(80);
   });
 });
+
+describe('async entrants are visibly marked', () => {
+  const candidates = ['v1', 'a1'].map((id) => ({
+    discordId: id,
+    displayName: id === 'a1' ? 'Async Alex' : 'Present Pat',
+    wallet: null,
+  }));
+
+  it('labels an async candidate so nobody mistakes them for present', () => {
+    const rows = buildVotingRows('t1', candidates, ['a1']);
+    const labels = rows.flatMap((r) =>
+      r.toJSON().components.map((c) => ('label' in c ? (c.label ?? '') : '')),
+    );
+    expect(labels).toContain('Present Pat');
+    expect(labels).toContain('Async Alex (async)');
+  });
+
+  it('uses a different button style for async candidates', () => {
+    const rows = buildVotingRows('t1', candidates, ['a1']);
+    const styles = rows.flatMap((r) =>
+      r.toJSON().components.map((c) => ('style' in c ? c.style : undefined)),
+    );
+    expect(new Set(styles).size).toBe(2);
+  });
+
+  it('keeps the label inside the Discord 80-character cap WITH the marker intact', () => {
+    const long = [{ discordId: 'a1', displayName: 'x'.repeat(200), wallet: null }];
+    const rows = buildVotingRows('t1', long, ['a1']);
+    const component = rows[0].toJSON().components[0];
+    const label = 'label' in component ? (component.label ?? '') : '';
+    // Exact, not just a length bound. Truncating the concatenated string
+    // instead of reserving room for the suffix would cut "(async)" in half
+    // and still satisfy a length-only assertion.
+    expect(label).toBe('x'.repeat(72) + ' (async)');
+    expect(label.length).toBe(80);
+  });
+
+  it('is unchanged when no async ids are given', () => {
+    const rows = buildVotingRows('t1', candidates);
+    const labels = rows.flatMap((r) =>
+      r.toJSON().components.map((c) => ('label' in c ? (c.label ?? '') : '')),
+    );
+    expect(labels).toEqual(['Present Pat', 'Async Alex']);
+  });
+});
