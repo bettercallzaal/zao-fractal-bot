@@ -9,7 +9,13 @@
 // arise and there is nothing to break. A split group does not resolve until
 // somebody changes their mind, which is the intent rather than a deadlock.
 
-import { MIN_GROUP_MEMBERS, MIN_VOTERS, RESPECT_POINTS, STARTING_LEVEL } from '@fractalbot/shared';
+import {
+  MAX_GROUP_MEMBERS,
+  MIN_GROUP_MEMBERS,
+  MIN_VOTERS,
+  RESPECT_POINTS,
+  STARTING_LEVEL,
+} from '@fractalbot/shared';
 import { findRoundWinner, majorityThreshold } from '../lib/voteThreshold.js';
 
 export interface Participant {
@@ -79,6 +85,16 @@ export function startSession(input: {
     );
   }
 
+  // RESPECT_POINTS has exactly MAX_GROUP_MEMBERS entries and finalRanking pays
+  // RESPECT_POINTS[index] ?? 0, so a seventh candidate would silently earn
+  // nothing. Fail loudly instead. The seating layer also caps this; both are
+  // wanted, because this is the last line before a real payout.
+  if (input.participants.length > MAX_GROUP_MEMBERS) {
+    throw new RangeError(
+      `A fractal group holds at most ${MAX_GROUP_MEMBERS} candidates including async entrants, got ${input.participants.length}`,
+    );
+  }
+
   const ids = new Set(input.participants.map((p) => p.discordId));
   for (const id of asyncEntrantIds) {
     if (!ids.has(id)) {
@@ -88,8 +104,12 @@ export function startSession(input: {
 
   // The floor guards the VOTER count, not the candidate count. Without this,
   // one voter plus five async entrants gives a votesNeeded of 1 - one person
-  // unilaterally ranking five absent people. Spec section 3.2.
-  const voterCount = input.participants.length - asyncEntrantIds.length;
+  // unilaterally ranking five absent people. Spec section 3.2. Derived the
+  // same way voters() is - counting participants not in the async set -
+  // rather than by subtracting lengths, so a duplicated id in
+  // asyncEntrantIds cannot make this guard disagree with voters().
+  const asyncIdSet = new Set(asyncEntrantIds);
+  const voterCount = input.participants.filter((p) => !asyncIdSet.has(p.discordId)).length;
   if (asyncEntrantIds.length > 0 && voterCount < MIN_VOTERS) {
     throw new RangeError(
       `A fractal with async entrants needs at least ${MIN_VOTERS} voters, got ${voterCount}`,
@@ -178,7 +198,14 @@ export function castVote(state: GameState, voterId: string, candidateId: string)
   }
 
   const tally = new Map<string, number>();
-  for (const choice of Object.values(votes)) {
+  // Iterate voters rather than the votes map. The denominator on the next line
+  // is the voter count, so a ballot from anyone who is not a voter would be
+  // counted in the numerator and not in the denominator - a candidate could
+  // clear the threshold on a ghost vote. castVote cannot currently insert such
+  // a key, but a rehydrated session could carry one.
+  for (const v of voters(voted)) {
+    const choice = votes[v.discordId];
+    if (choice === undefined) continue;
     tally.set(choice, (tally.get(choice) ?? 0) + 1);
   }
 

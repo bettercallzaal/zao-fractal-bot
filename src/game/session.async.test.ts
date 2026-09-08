@@ -106,4 +106,59 @@ describe('async entrants are votable-for and never voted-with', () => {
       }),
     ).toThrow(/not a participant/);
   });
+
+  it('a round still resolves normally with 4 voters + 2 async (guards against over-filtering)', () => {
+    let s = mixed();
+    for (const v of ['v1', 'v2', 'v3']) {
+      s = castVote(s, v, 'v2').state;
+    }
+    const out = castVote(s, 'v4', 'v2');
+    expect(out.roundWinnerId).toBe('v2');
+  });
+
+  it('does not count a ballot keyed to an async entrant toward the threshold', () => {
+    // 4 voters (v1-v4) + 1 async (a1). votesNeeded = majorityThreshold(4) = 3.
+    const base = startSession({
+      threadId: 't',
+      meetingNumber: 92,
+      groupNumber: '1',
+      participants: ['v1', 'v2', 'v3', 'v4', 'a1'].map(person),
+      asyncEntrantIds: ['a1'],
+    });
+    // A rehydrated session could carry a ghost ballot keyed to an async
+    // entrant - castVote itself can never insert one. v1 has 2 real votes
+    // (v1, v2) plus the ghost, which would total 3 - exactly the threshold -
+    // if the ghost were counted. It must not be: 2 real votes is short of 3.
+    const state = {
+      ...base,
+      votes: { a1: 'v1', v1: 'v1', v2: 'v1', v3: 'v2' },
+    };
+    const out = castVote(state, 'v4', 'v2');
+    expect(out.awaitingVoters).toEqual([]);
+    expect(out.roundWinnerId).toBeNull();
+  });
+
+  it('throws when candidates exceed MAX_GROUP_MEMBERS', () => {
+    expect(() =>
+      startSession({
+        threadId: 't',
+        meetingNumber: 92,
+        groupNumber: '1',
+        participants: ['v1', 'v2', 'v3', 'v4', 'v5', 'a1', 'a2'].map(person),
+        asyncEntrantIds: ['a1', 'a2'],
+      }),
+    ).toThrow(/at most 6 candidates/);
+  });
+
+  it('accepts exactly MAX_GROUP_MEMBERS candidates', () => {
+    expect(() =>
+      startSession({
+        threadId: 't',
+        meetingNumber: 92,
+        groupNumber: '1',
+        participants: ['v1', 'v2', 'v3', 'v4', 'a1', 'a2'].map(person),
+        asyncEntrantIds: ['a1', 'a2'],
+      }),
+    ).not.toThrow();
+  });
 });
