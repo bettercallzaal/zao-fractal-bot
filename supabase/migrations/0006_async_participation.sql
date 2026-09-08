@@ -25,8 +25,29 @@
 -- sections 2 and 3.2.
 -- ============================================================
 
-alter table public.discord_roster
-  drop constraint if exists discord_roster_confidence_check;
+-- Dropped by lookup rather than by name. 'discord_roster_confidence_check' is
+-- what Postgres generates for 0002's unnamed column CHECK, but that could not
+-- be verified against a real database from this machine, and a wrong guess
+-- fails silently: drop-if-exists no-ops, then the add below errors on an
+-- already-migrated database. Matching on the constraint definition removes the
+-- assumption. Scoped to checks mentioning `confidence`, so no other constraint
+-- on the table is touched.
+do $$
+declare c record;
+begin
+  for c in
+    select con.conname
+    from pg_constraint con
+    join pg_class rel on rel.oid = con.conrelid
+    join pg_namespace ns on ns.oid = rel.relnamespace
+    where ns.nspname = 'public'
+      and rel.relname = 'discord_roster'
+      and con.contype = 'c'
+      and pg_get_constraintdef(con.oid) ilike '%confidence%'
+  loop
+    execute format('alter table public.discord_roster drop constraint %I', c.conname);
+  end loop;
+end $$;
 
 alter table public.discord_roster
   add constraint discord_roster_confidence_check
