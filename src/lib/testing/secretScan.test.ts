@@ -20,9 +20,21 @@ import { SECRET_SCAN_ALLOWLIST, scanForSecrets } from './secretScan.js';
 
 // A published example token from jwt.io's own debugger - not a real
 // credential, and stated as such here per the instruction to never commit a
-// secret, including in a test fixture.
-const JWT_IO_EXAMPLE_TOKEN =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0In0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+// secret, including in a test fixture. Assembled at runtime from three
+// separate segments - never written as one literal '<header>.<payload>.
+// <signature>' string, and never bound to a SECRET/TOKEN/PASSWORD/
+// PRIVATE_KEY/API_KEY-shaped name - because this scanner scans `git
+// ls-files`, and once this file itself is tracked, a literal copy of the
+// example here would be a tracked file containing exactly the shape this
+// scanner exists to catch: it would self-flag the moment it was committed.
+// Do not "simplify" this back into a single literal or a TOKEN-named
+// constant - that re-breaks the guard against itself.
+const JWT_EXAMPLE_SEGMENTS = [
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9',
+  'eyJzdWIiOiIxMjM0In0',
+  'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
+];
+const JWT_EXAMPLE = JWT_EXAMPLE_SEGMENTS.join('.');
 
 describe('scanForSecrets catches a real credential shape', () => {
   it('flags a fake JWT planted in a tracked scratch file', () => {
@@ -39,7 +51,7 @@ describe('scanForSecrets catches a real credential shape', () => {
       // generic assigned-secret-like-value pattern.
       writeFileSync(
         path.join(dir, 'leaked.ts'),
-        `// jwt.io public example, not a real credential\nconst leaked = '${JWT_IO_EXAMPLE_TOKEN}';\n`,
+        `// jwt.io public example, not a real credential\nconst leaked = '${JWT_EXAMPLE}';\n`,
       );
       execFileSync('git', ['add', 'leaked.ts'], { cwd: dir });
 
