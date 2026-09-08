@@ -108,14 +108,26 @@ export interface FakeButtonOptions {
   channel?: AnyThreadChannel | null;
 }
 
+// Bumped once per `fakeDiscord()` call, across the whole test run, and baked
+// into every auto-generated id below. `live` in gameCommands.ts (the
+// in-flight session cache, keyed by thread id) is module-level state that is
+// never reset between tests, so if two different tests' fakes both minted
+// "thread-1" they would collide in that shared map. Nothing reads those ids
+// back today, but a future restart/recovery test on an auto-generated split
+// thread id would hit that silently - a prefix unique to this fakeDiscord()
+// instance rules it out without touching production code.
+let instanceCounter = 0;
+
 /** One harness per test, mirroring `fakeSupabase()`'s one-fake-per-test shape.
  * Everything created through it shares one `calls` log and one thread-id
  * counter, so ids never collide across a parent channel and the thread the
- * interaction started in. */
+ * interaction started in - and, via the instance prefix, never collide with
+ * another test's fake either. */
 export function fakeDiscord() {
   const calls: Call[] = [];
+  const instanceId = ++instanceCounter;
   let counter = 0;
-  const nextId = (prefix: string) => `${prefix}-${++counter}`;
+  const nextId = (prefix: string) => `${prefix}-${instanceId}-${++counter}`;
 
   function makeThreadMember(input: FakeMemberInput): ThreadMember {
     const fake = {

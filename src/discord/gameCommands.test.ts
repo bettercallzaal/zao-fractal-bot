@@ -177,6 +177,14 @@ describe('handleStart via registerGameCommands', () => {
     expect(creates).toHaveLength(2);
     expect(creates[0].name).toBe('ZAO Fractal 222 - Group 1');
     expect(creates[1].name).toBe('ZAO Fractal 222 - Group 2');
+    // Discord threads cannot nest, so both split threads MUST be created on
+    // the parent text channel, never on the thread /start ran in - this is
+    // the load-bearing detail of the whole split design, not just a naming
+    // detail. (The fake thread object has no `.threads` at all, so a
+    // regression that targeted it would already throw rather than reach this
+    // point - this assertion is what makes that guarantee visible to a
+    // reader instead of merely structural.)
+    expect(creates.every((c) => c.parentId === 'parent-1')).toBe(true);
 
     const group1ThreadId = creates[0].threadId as string;
     const group2ThreadId = creates[1].threadId as string;
@@ -197,6 +205,35 @@ describe('handleStart via registerGameCommands', () => {
     expect(sessionInserts).toHaveLength(2);
     const threadIds = sessionInserts.map((c) => (c.payload as { thread_id: string }).thread_id);
     expect(new Set(threadIds)).toEqual(new Set([group1ThreadId, group2ThreadId]));
+
+    // Member routing, not just member counts: the roster createSession wrote
+    // to discord_roster for a given group (see gameRepo.ts) has to be the
+    // exact same set of discordIds that landed in that SAME group's thread
+    // via thread.members.add() - a swap between which group's participants
+    // get added to which thread, versus which group's participants get
+    // recorded against which session, would slip past a count-only check
+    // whenever the two groups happen to be the same size. The allocation
+    // itself (who ends up in group 1 vs group 2) is covered by
+    // src/game/split.test.ts and is randomized here (planSplitGroups
+    // shuffles), so this checks the adapter's routing, not the allocation.
+    const rosterInserts = sb.calls.filter(
+      (c) => c.table === 'discord_roster' && c.op === 'insert',
+    );
+    expect(rosterInserts).toHaveLength(2);
+    sessionInserts.forEach((sessionInsert, i) => {
+      // Each fractal_sessions insert is immediately followed, within the same
+      // split-loop iteration, by that group's discord_roster insert (see
+      // createSession in gameRepo.ts) - so index i lines the two filtered
+      // lists up on the same iteration/thread.
+      const threadId = (sessionInsert.payload as { thread_id: string }).thread_id;
+      const rosterIds = (rosterInserts[i].payload as { discord_id: string }[])
+        .map((r) => r.discord_id)
+        .sort();
+      const addedIds = addsFor(threadId)
+        .map((c) => c.discordId as string)
+        .sort();
+      expect(rosterIds).toEqual(addedIds);
+    });
 
     const editReplies = discord.calls.filter((c) => c.type === 'editReply');
     expect(editReplies).toHaveLength(1);
