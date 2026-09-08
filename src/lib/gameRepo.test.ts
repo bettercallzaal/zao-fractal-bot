@@ -16,29 +16,16 @@ const state = startSession({
 
 const sessionInsertOk = { 'fractal_sessions.insert': { data: { id: 'sess-1' }, error: null } };
 
-// KNOWN FAILING as of 2026-09-08, left red on purpose - do not "fix" by
-// deleting meeting_number from the payloads below or from gameRepo.ts.
-//
-// Every createSession test here fails now that fakeSupabase checks
-// fractal_sessions against a real snapshot of the ZAO OS database (see
-// src/lib/testing/zaoos-schema.json / PARTIALLY_COVERED_TABLES): the live
-// table has no `meeting_number` column. Confirmed independently with a live
-// SELECT, not just the snapshot: `GET .../fractal_sessions?select=meeting_number`
-// returns PostgREST 42703 "column ... does not exist".
-//
-// Root cause: 0005_respect_game.sql ALTERs fractal_sessions to add this
-// column, but per .handoffs/session-2026-09-03-fractal-v2/README.md,
-// migrations 0001-0005 have never been applied to the ZAO OS project - this
-// is still true today, not just as of that handoff. createSession has been
-// writing a column that will not exist until that deploy step happens.
-//
-// This is the bug class docs/superpowers/plans/2026-09-01-respect-game-recorder.md
-// exists to catch: a write that looks fine in every test because the fake
-// had no opinion about this table. See
-// .superpowers/sdd/2026-09-07-async-participation/zaoos-schema-report.md for
-// the full writeup. Fixing it (either deploying the pending migrations, or
-// dropping meeting_number from the insert if it turns out to be unneeded) is
-// a product/ops decision, not something to paper over here.
+// createSession writes fractal_sessions.meeting_number, a column
+// 0005_respect_game.sql adds via `alter table ... add column if not
+// exists`. The live ZAO OS database doesn't have it yet (those migrations
+// have never been applied there - a tracked deployment gap, see
+// pendingMigrationColumns() in schemaFromMigrations.ts), but the column is
+// real and pending, not a typo - so buildSchema() unions it into
+// fractal_sessions's known columns from the ZAO OS snapshot, and these
+// tests pass. A genuine unknown column on this table (a typo like
+// `meetingnumber`) is still rejected; see
+// src/lib/testing/schemaFromMigrations.test.ts for both cases.
 describe('createSession', () => {
   it('writes an active session row carrying the meeting number', async () => {
     const sb = fakeSupabase({ results: sessionInsertOk });

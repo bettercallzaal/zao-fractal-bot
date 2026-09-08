@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { assertWritable } from './assertWritable.js';
 import {
   buildSchema,
   loadZaoosSchema,
   parseMigrations,
+  pendingMigrationColumns,
   PARTIALLY_COVERED_TABLES,
 } from './schemaFromMigrations.js';
 
@@ -80,8 +82,60 @@ describe('unparseable CHECK constraints fail loudly rather than being silently s
     );
   });
 
+  it('does not false-positive on a CHECK inside a block comment', () => {
+    // No current migration uses /* ... */ (0006 documents itself with `--`
+    // blocks), but nothing stops a future author from preferring it - and an
+    // illustrative, unparseable `check (...)` inside one must not take down
+    // buildSchema() for every test file in the repo. Only `--` line comments
+    // were stripped before this test; block comments were not.
+    const sql = `
+      /* example: check (level between 1 and 6) is NOT how we do it here -
+         multi-line block comment, deliberately spanning several lines. */
+      create table if not exists public.some_table (
+        id uuid primary key default gen_random_uuid(),
+        status text not null default 'pending'
+          check (status in ('pending', 'done'))
+      );
+    `;
+    expect(() => parseMigrations([sql], ['0099_block_commented.sql'])).not.toThrow();
+  });
+
   it('the real migration set still builds clean', () => {
     expect(() => buildSchema()).not.toThrow();
+  });
+});
+
+describe('a table-level named CHECK constraint inside a create table body is enforced', () => {
+  // `constraint <name> check (<col> in (<list>))` written INSIDE a
+  // `create table ( ... )` body (as opposed to a later `alter table ... add
+  // constraint`) is a recognised shape - assertOnlyKnownCheckShapes does not
+  // throw on it - but until this fix, nothing ever attached its values to
+  // the column. The result was a CHECK that parsed, didn't throw, and
+  // constrained nothing: the original "silently unconstrained" failure in a
+  // shape the first fix didn't cover.
+  const sql = `
+    create table if not exists public.t (
+      id uuid primary key default gen_random_uuid(),
+      status text,
+      constraint t_status_check check (status in ('a','b'))
+    );
+  `;
+
+  it('attaches the CHECK values to the named column', () => {
+    const schema = parseMigrations([sql]);
+    expect(schema.tables.get('t')?.columns.get('status')?.checkValues).toEqual(
+      new Set(['a', 'b']),
+    );
+  });
+
+  it('is actually enforced by assertWritable - a value outside the list is rejected', () => {
+    const schema = parseMigrations([sql]);
+    expect(() => assertWritable('t', { status: 'c' }, schema)).toThrow(/status/);
+  });
+
+  it('and a value inside the list passes', () => {
+    const schema = parseMigrations([sql]);
+    expect(() => assertWritable('t', { status: 'a' }, schema)).not.toThrow();
   });
 });
 
@@ -145,6 +199,26 @@ describe('the ZAO OS fixture closes the four uncovered tables to column-existenc
     expect(fractalScores?.columns.has('nonsense_column')).toBe(false);
   });
 
+  it('unions in columns this repo\'s own migrations add to a partially-covered table', () => {
+    // 0005_respect_game.sql ALTERs fractal_sessions to add meeting_number.
+    // The live ZAO OS snapshot doesn't have it (those migrations have never
+    // been applied there - a deployment gap, not a code defect), but
+    // createSession writes exactly this column, on purpose, because it is
+    // the column its own migration defines. The known-columns set for a
+    // partially-covered table must be the UNION of the snapshot and what
+    // this repo's migrations define for it - not the snapshot alone.
+    expect(schema.tables.get('fractal_sessions')?.columns.has('meeting_number')).toBe(true);
+    expect(() =>
+      assertWritable('fractal_sessions', { status: 'active', meeting_number: 111 }, schema),
+    ).not.toThrow();
+  });
+
+  it('still rejects a genuine typo - union, not disabled unknown-column detection', () => {
+    expect(() =>
+      assertWritable('fractal_sessions', { meetingnumber: 111 }, schema),
+    ).toThrow(/meetingnumber/);
+  });
+
   it('carries NO not-null or CHECK information for these tables - column existence only', () => {
     // This is the boundary PARTIALLY_COVERED_TABLES documents: PostgREST's
     // schema description conflates real not-null columns with every
@@ -157,6 +231,29 @@ describe('the ZAO OS fixture closes the four uncovered tables to column-existenc
         expect(column.notNull).toBe(false);
         expect(column.checkValues).toBeUndefined();
       }
+    }
+  });
+});
+
+describe('pendingMigrationColumns - drift information, not a failure', () => {
+  // Once the union lands, a partially-covered table's own pending migration
+  // columns no longer make gameRepo.test.ts red - that would misrepresent a
+  // tracked deployment gap as a code defect. But the fact itself (this
+  // repo's migrations define columns ZAO OS's live database doesn't have
+  // yet) is real and worth stating plainly, so pendingMigrationColumns()
+  // reports it instead of hiding it.
+  it('reports fractal_sessions.meeting_number as pending', () => {
+    const pending = pendingMigrationColumns();
+    expect(pending).toEqual(
+      expect.arrayContaining([{ table: 'fractal_sessions', column: 'meeting_number' }]),
+    );
+  });
+
+  it('never reports a column the live snapshot already has', () => {
+    const pending = pendingMigrationColumns();
+    for (const { table, column } of pending) {
+      const fixture = loadZaoosSchema();
+      expect(fixture.tables[table]?.columns[column]).toBeUndefined();
     }
   });
 });

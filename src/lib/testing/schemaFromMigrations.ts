@@ -79,8 +79,14 @@ const TABLE_CONSTRAINT_KEYWORDS = new Set([
 // text ends.
 const COLUMN_STOP_WORDS = /\b(not\s+null|default|check|references|primary\s+key|unique)\b/i;
 
-function stripLineComments(sql: string): string {
-  return sql.replace(/--[^\n]*/g, '');
+function stripComments(sql: string): string {
+  // Block comments first (so a `--` accidentally sitting inside one doesn't
+  // get treated as a line comment that stops early), then line comments.
+  // No current migration uses `/* ... */` - 0006 documents itself with `--`
+  // blocks - but a future author choosing that style must not be able to
+  // take down buildSchema() for every test in the repo just by writing an
+  // illustrative `check (...)` inside one.
+  return sql.replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '');
 }
 
 function findMatchingParen(text: string, openIndex: number): number {
@@ -185,6 +191,27 @@ function assertOnlyKnownCheckShapes(sql: string, fileLabel: string): void {
   }
 }
 
+// A table-level NAMED check constraint written INSIDE a `create table (...)`
+// body, e.g. `constraint t_status_check check (status in ('a','b'))`, is a
+// separate segment whose first token is `constraint` - parseColumnSegment
+// correctly refuses to treat it as a column (TABLE_CONSTRAINT_KEYWORDS), but
+// until this existed, nothing ever attached its values to the column either.
+// That produced a CHECK that parses (assertOnlyKnownCheckShapes is satisfied
+// - this is a recognised `<col> in (<list>)` shape), throws nothing, and
+// constrains nothing: the original "silently unconstrained" failure, in a
+// shape the CHECK-shape guard doesn't catch because there is nothing
+// unrecognised about it - only unattached.
+function applyTableLevelNamedChecks(body: string, columns: Map<string, ColumnSchema>): void {
+  const re = /\bconstraint\s+\w+\s+check\s*\(\s*(\w+)\s+in\s*\(([^)]+)\)\s*\)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(body))) {
+    const [, colName, valuesText] = match;
+    const col = columns.get(colName);
+    if (!col) continue;
+    col.checkValues = valuesFromList(valuesText);
+  }
+}
+
 function applyCreateTables(sql: string, model: SchemaModel): void {
   const re = /create table if not exists public\.(\w+)\s*\(/gi;
   let match: RegExpExecArray | null;
@@ -199,31 +226,72 @@ function applyCreateTables(sql: string, model: SchemaModel): void {
       const col = parseColumnSegment(segment);
       if (col) columns.set(col.name, col);
     }
+    applyTableLevelNamedChecks(body, columns);
     model.tables.set(tableName, { name: tableName, columns });
   }
 }
 
-function applyAddColumns(sql: string, model: SchemaModel): void {
+interface AddColumnStatement {
+  table: string;
+  column: string;
+  col: ColumnSchema;
+}
+
+/** Yields every `alter table public.<t> add column if not exists <c> ...`
+ * statement in `sql`, regardless of whether `<t>` is a table these
+ * migrations also `create table`-d. Shared by applyAddColumns (which only
+ * applies the ones targeting a known table) and collectAllAddedColumns
+ * (which needs ALL of them, including ones targeting a
+ * PARTIALLY_COVERED_TABLES table like fractal_sessions, to compute the
+ * union with the ZAO OS snapshot and to report pendingMigrationColumns()). */
+function* iterAddColumnStatements(sql: string): Generator<AddColumnStatement> {
   const re = /alter table public\.(\w+)\s+add column if not exists\s+(\w+)\s+([^;]*);/gi;
   let match: RegExpExecArray | null;
   while ((match = re.exec(sql))) {
     const [, tableName, colName, rest] = match;
+    const stopAt = rest.search(COLUMN_STOP_WORDS);
+    const type = (stopAt === -1 ? rest : rest.slice(0, stopAt)).trim();
+    yield {
+      table: tableName,
+      column: colName,
+      col: {
+        name: colName,
+        type,
+        notNull: /not\s+null/i.test(rest) || /\bprimary\s+key\b/i.test(rest),
+        hasDefault: /\bdefault\b/i.test(rest),
+      },
+    };
+  }
+}
+
+function applyAddColumns(sql: string, model: SchemaModel): void {
+  for (const { table: tableName, column: colName, col } of iterAddColumnStatements(sql)) {
     const table = model.tables.get(tableName);
     // A table these migrations never `create table`-d (e.g. fractal_sessions,
     // owned by ZAO OS) is left for buildSchema()'s ZAO OS fixture merge
     // rather than being half-guessed from a single ALTER. See
-    // PARTIALLY_COVERED_TABLES.
+    // PARTIALLY_COVERED_TABLES and collectAllAddedColumns.
     if (!table) continue;
-
-    const stopAt = rest.search(COLUMN_STOP_WORDS);
-    const type = (stopAt === -1 ? rest : rest.slice(0, stopAt)).trim();
-    table.columns.set(colName, {
-      name: colName,
-      type,
-      notNull: /not\s+null/i.test(rest) || /\bprimary\s+key\b/i.test(rest),
-      hasDefault: /\bdefault\b/i.test(rest),
-    });
+    table.columns.set(colName, col);
   }
+}
+
+/** Every `add column if not exists` this repo's migrations make, keyed by
+ * table, regardless of whether that table is also `create table`-d here.
+ * For a PARTIALLY_COVERED_TABLES table this is exactly the columns this
+ * repo's own migrations extend it with - e.g. fractal_sessions.meeting_number
+ * from 0005 - which is what applyZaoosColumnExistence unions into the live
+ * snapshot, and what pendingMigrationColumns() diffs against it. */
+function collectAllAddedColumns(sqlTexts: string[]): Map<string, Map<string, ColumnSchema>> {
+  const byTable = new Map<string, Map<string, ColumnSchema>>();
+  for (const raw of sqlTexts) {
+    const sql = stripComments(raw);
+    for (const { table, column, col } of iterAddColumnStatements(sql)) {
+      if (!byTable.has(table)) byTable.set(table, new Map());
+      byTable.get(table)!.set(column, col);
+    }
+  }
+  return byTable;
 }
 
 function applyAddedChecks(sql: string, model: SchemaModel): void {
@@ -281,8 +349,27 @@ export function loadZaoosSchema(
  * schemas: every column is marked `notNull: false` with no `checkValues`, so
  * assertWritable's not-null and CHECK logic - which does apply to the tables
  * these migrations create - never fires for these four. Only "is this key a
- * real column" is enforced. See PARTIALLY_COVERED_TABLES. */
-function applyZaoosColumnExistence(model: SchemaModel, fixture: ZaoosSchemaFixture): void {
+ * real column" is enforced. See PARTIALLY_COVERED_TABLES.
+ *
+ * `migrationColumns` (from collectAllAddedColumns) is UNIONED in on top of
+ * the snapshot, not used to replace it: a table like fractal_sessions is
+ * both external (owned by ZAO OS) AND extended by this repo's own migrations
+ * (0005 adds meeting_number). The live snapshot can be stale relative to
+ * migrations ZAO OS hasn't applied yet - a tracked deployment gap (see
+ * pendingMigrationColumns()), not evidence the code is wrong - so a column
+ * this repo's migrations define is still a "known" column for existence
+ * checking. This does not weaken unknown-column detection: only the exact
+ * column names our own migrations add are unioned in, so a typo like
+ * `meetingnumber` is still rejected. Columns added this way get the same
+ * existence-only treatment as the rest of the table (notNull: false,
+ * hasDefault: true) rather than whatever the migration happens to say, so
+ * the "column existence only" boundary stays uniform across the whole
+ * table regardless of which source a column came from. */
+function applyZaoosColumnExistence(
+  model: SchemaModel,
+  fixture: ZaoosSchemaFixture,
+  migrationColumns: Map<string, Map<string, ColumnSchema>>,
+): void {
   for (const tableName of PARTIALLY_COVERED_TABLES) {
     const tableFixture = fixture.tables[tableName];
     if (!tableFixture) {
@@ -298,6 +385,15 @@ function applyZaoosColumnExistence(model: SchemaModel, fixture: ZaoosSchemaFixtu
         type: colSpec.format ?? 'unknown',
         // Deliberately false for every column here, always - see the
         // function doc comment. Not a parsed fact about the real column.
+        notNull: false,
+        hasDefault: true,
+      });
+    }
+    for (const [colName, migrationCol] of migrationColumns.get(tableName) ?? []) {
+      if (columns.has(colName)) continue; // live snapshot already has it
+      columns.set(colName, {
+        name: colName,
+        type: migrationCol.type,
         notNull: false,
         hasDefault: true,
       });
@@ -318,7 +414,7 @@ export function parseMigrations(sqlTexts: string[], fileLabels: string[] = []): 
   const model: SchemaModel = { tables: new Map() };
   sqlTexts.forEach((raw, i) => {
     const label = fileLabels[i] ?? `migration[${i}]`;
-    const sql = stripLineComments(raw);
+    const sql = stripComments(raw);
     assertOnlyKnownCheckShapes(sql, label);
     applyCreateTables(sql, model);
     applyAddColumns(sql, model);
@@ -340,6 +436,46 @@ export function buildSchema(
     .sort();
   const sqlTexts = files.map((f) => readFileSync(path.join(migrationsDir, f), 'utf8'));
   const model = parseMigrations(sqlTexts, files);
-  applyZaoosColumnExistence(model, loadZaoosSchema(zaoosFixturePath));
+  const migrationColumns = collectAllAddedColumns(sqlTexts);
+  applyZaoosColumnExistence(model, loadZaoosSchema(zaoosFixturePath), migrationColumns);
   return model;
+}
+
+export interface PendingMigrationColumn {
+  table: string;
+  column: string;
+}
+
+/** Columns this repo's own migrations define for a PARTIALLY_COVERED_TABLES
+ * table that the checked-in ZAO OS snapshot does not have - i.e. exactly
+ * what applying this repo's still-pending migrations to the ZAO OS project
+ * would add. Today that is fractal_sessions.meeting_number (0005), because
+ * migrations 0001-0005 have never been applied there.
+ *
+ * This is DRIFT INFORMATION, not a failure: buildSchema() already unions
+ * these columns in (see applyZaoosColumnExistence), so assertWritable
+ * accepts them. A test surfacing this list should report what it finds, not
+ * throw - the pending-migration status is a tracked deployment gap, and a
+ * red suite would misrepresent it as a code defect. */
+export function pendingMigrationColumns(
+  migrationsDir = 'supabase/migrations',
+  zaoosFixturePath = 'src/lib/testing/zaoos-schema.json',
+): PendingMigrationColumn[] {
+  const files = readdirSync(migrationsDir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+  const sqlTexts = files.map((f) => readFileSync(path.join(migrationsDir, f), 'utf8'));
+  const migrationColumns = collectAllAddedColumns(sqlTexts);
+  const fixture = loadZaoosSchema(zaoosFixturePath);
+
+  const pending: PendingMigrationColumn[] = [];
+  for (const table of PARTIALLY_COVERED_TABLES) {
+    const added = migrationColumns.get(table);
+    if (!added) continue;
+    const liveColumns = new Set(Object.keys(fixture.tables[table]?.columns ?? {}));
+    for (const column of added.keys()) {
+      if (!liveColumns.has(column)) pending.push({ table, column });
+    }
+  }
+  return pending;
 }
