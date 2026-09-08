@@ -21,6 +21,20 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Default paths below are resolved relative to *this file's own location*,
+// not process.cwd(). A caller running from the repo root and one running
+// from a different npm workspace (e.g. `npm test -w web`, whose cwd is
+// web/) must get the same schema - cwd-relative defaults ('supabase/
+// migrations') would silently resolve to `web/supabase/migrations` (which
+// doesn't exist) the moment this module is imported from outside the repo
+// root, which is exactly what importing fakeSupabase.ts from web/ needs to
+// do. See web/lib/dispatchCommand.test.ts, the first caller from outside
+// this workspace.
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_MIGRATIONS_DIR = path.resolve(MODULE_DIR, '..', '..', '..', 'supabase', 'migrations');
+const DEFAULT_ZAOOS_FIXTURE_PATH = path.resolve(MODULE_DIR, 'zaoos-schema.json');
 
 export interface ColumnSchema {
   name: string;
@@ -429,7 +443,7 @@ export interface ZaoosSchemaFixture {
  * alone. Exported (not just used internally) so a freshness test can check
  * `provenance.recheckBy` without paying for a full buildSchema(). */
 export function loadZaoosSchema(
-  fixturePath = 'src/lib/testing/zaoos-schema.json',
+  fixturePath = DEFAULT_ZAOOS_FIXTURE_PATH,
 ): ZaoosSchemaFixture {
   return JSON.parse(readFileSync(fixturePath, 'utf8')) as ZaoosSchemaFixture;
 }
@@ -518,8 +532,8 @@ export function parseMigrations(sqlTexts: string[], fileLabels: string[] = []): 
  * column-existence-only coverage for PARTIALLY_COVERED_TABLES from the
  * checked-in ZAO OS snapshot (zaoosFixturePath). */
 export function buildSchema(
-  migrationsDir = 'supabase/migrations',
-  zaoosFixturePath = 'src/lib/testing/zaoos-schema.json',
+  migrationsDir = DEFAULT_MIGRATIONS_DIR,
+  zaoosFixturePath = DEFAULT_ZAOOS_FIXTURE_PATH,
 ): SchemaModel {
   const files = readdirSync(migrationsDir)
     .filter((f) => f.endsWith('.sql'))
@@ -548,8 +562,8 @@ export interface PendingMigrationColumn {
  * throw - the pending-migration status is a tracked deployment gap, and a
  * red suite would misrepresent it as a code defect. */
 export function pendingMigrationColumns(
-  migrationsDir = 'supabase/migrations',
-  zaoosFixturePath = 'src/lib/testing/zaoos-schema.json',
+  migrationsDir = DEFAULT_MIGRATIONS_DIR,
+  zaoosFixturePath = DEFAULT_ZAOOS_FIXTURE_PATH,
 ): PendingMigrationColumn[] {
   const files = readdirSync(migrationsDir)
     .filter((f) => f.endsWith('.sql'))

@@ -1,5 +1,15 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { dispatchCommand } from './dispatchCommand.js';
+// Shared guarded Supabase fake (see src/lib/testing/fakeSupabase.ts) instead
+// of a hand-rolled `{ from: () => ({ insert: ... }) }` stub - a hand-rolled
+// fake accepts any payload, which is exactly the bug this fake exists to
+// catch (a schema violation on the `bot_commands` insert below would pass
+// silently). This is a cross-workspace import: web/ is a separate npm
+// workspace from the root src/lib/testing/ package, but schemaFromMigrations
+// resolves its migrations/fixture paths relative to its own module location
+// (not process.cwd()), so it works the same regardless of which workspace's
+// vitest is running it.
+import { fakeSupabase } from '../../src/lib/testing/fakeSupabase.js';
 
 describe('dispatchCommand', () => {
   beforeEach(() => {
@@ -7,20 +17,15 @@ describe('dispatchCommand', () => {
   });
 
   it('returns the queue result when the bot acks within the poll window', async () => {
-    const supabase = {
-      from: () => ({
-        insert: () => ({
-          select: () => ({
-            single: async () => ({ data: { id: 'row-1', idempotency_key: 'k1' }, error: null }),
-          }),
-        }),
-        select: () => ({
-          eq: () => ({
-            single: async () => ({ data: { status: 'done', result: { groups: [['a']] } }, error: null }),
-          }),
-        }),
-      }),
-    };
+    const supabase = fakeSupabase({
+      results: {
+        'bot_commands.insert': { data: { id: 'row-1', idempotency_key: 'k1' }, error: null },
+        'bot_commands.select': {
+          data: { status: 'done', result: { groups: [['a']] } },
+          error: null,
+        },
+      },
+    });
 
     vi.stubGlobal('fetch', vi.fn());
 
@@ -39,20 +44,12 @@ describe('dispatchCommand', () => {
   });
 
   it('falls back to the HTTP endpoint when the queue does not ack in time', async () => {
-    const supabase = {
-      from: () => ({
-        insert: () => ({
-          select: () => ({
-            single: async () => ({ data: { id: 'row-1', idempotency_key: 'k2' }, error: null }),
-          }),
-        }),
-        select: () => ({
-          eq: () => ({
-            single: async () => ({ data: { status: 'pending' }, error: null }),
-          }),
-        }),
-      }),
-    };
+    const supabase = fakeSupabase({
+      results: {
+        'bot_commands.insert': { data: { id: 'row-1', idempotency_key: 'k2' }, error: null },
+        'bot_commands.select': { data: { status: 'pending' }, error: null },
+      },
+    });
 
     vi.stubGlobal(
       'fetch',
@@ -77,20 +74,12 @@ describe('dispatchCommand', () => {
   });
 
   it('rejects when the HTTP fallback fetch fails', async () => {
-    const supabase = {
-      from: () => ({
-        insert: () => ({
-          select: () => ({
-            single: async () => ({ data: { id: 'row-1', idempotency_key: 'k3' }, error: null }),
-          }),
-        }),
-        select: () => ({
-          eq: () => ({
-            single: async () => ({ data: { status: 'pending' }, error: null }),
-          }),
-        }),
-      }),
-    };
+    const supabase = fakeSupabase({
+      results: {
+        'bot_commands.insert': { data: { id: 'row-1', idempotency_key: 'k3' }, error: null },
+        'bot_commands.select': { data: { status: 'pending' }, error: null },
+      },
+    });
 
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new Error('bot unreachable');
@@ -112,20 +101,12 @@ describe('dispatchCommand', () => {
   });
 
   it('rejects when the HTTP fallback fetch times out', async () => {
-    const supabase = {
-      from: () => ({
-        insert: () => ({
-          select: () => ({
-            single: async () => ({ data: { id: 'row-1', idempotency_key: 'k4' }, error: null }),
-          }),
-        }),
-        select: () => ({
-          eq: () => ({
-            single: async () => ({ data: { status: 'pending' }, error: null }),
-          }),
-        }),
-      }),
-    };
+    const supabase = fakeSupabase({
+      results: {
+        'bot_commands.insert': { data: { id: 'row-1', idempotency_key: 'k4' }, error: null },
+        'bot_commands.select': { data: { status: 'pending' }, error: null },
+      },
+    });
 
     vi.stubGlobal('fetch', vi.fn(async (url: string, options: any) => {
       const signal = options.signal as AbortSignal;

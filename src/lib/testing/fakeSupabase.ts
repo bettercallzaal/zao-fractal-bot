@@ -11,9 +11,14 @@
 // silently unguarded (it accepts any payload, exactly the bug this whole
 // effort exists to catch), and tableCoverage.test.ts cannot catch that for
 // you - it checks that tables are known to the schema guard, not that a
-// given test file's fake actually calls the guard. See
-// web/lib/dispatchCommand.test.ts for a real, unfixed example of this exact
-// gap: it hand-rolls its own ungated fake that inserts into `bot_commands`.
+// given test file's fake actually calls the guard.
+//
+// web/lib/dispatchCommand.test.ts used to be exactly this gap: it hand-rolled
+// its own ungated fake that inserted into `bot_commands`. It now imports this
+// fake instead, reaching across the web/ npm workspace boundary via a
+// relative path - the reason buildSchema()'s default paths in
+// schemaFromMigrations.ts are resolved relative to that module's own file
+// location rather than process.cwd().
 
 import { assertWritable } from './assertWritable.js';
 import { buildSchema, type SchemaModel } from './schemaFromMigrations.js';

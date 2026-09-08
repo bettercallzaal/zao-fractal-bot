@@ -43,9 +43,7 @@ export const TABLE_COVERAGE_EXCEPTIONS: readonly TableCoverageException[] = [
       '- that would make the guard silently agree that a nonexistent table is fine to write to. ' +
       'It is a live bug in web/lib that belongs in front of a human: either those two call sites ' +
       'are dead code that should be deleted, or a wallets table needs to be created for real. ' +
-      "This exception documents the finding; it does not resolve it. (Separately, " +
-      'web/lib/dispatchCommand.test.ts:10-22 hand-rolls its own ungated Supabase fake that ' +
-      "inserts into bot_commands, bypassing this guard entirely - not fixed here.)",
+      'This exception documents the finding; it does not resolve it.',
   },
 ];
 
