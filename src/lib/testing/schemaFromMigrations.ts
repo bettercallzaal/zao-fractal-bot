@@ -43,12 +43,23 @@ export interface SchemaModel {
 /**
  * Tables this repo's code writes to that are never `create table`-d by these
  * migrations - they live in the ZAO OS Supabase project (see
- * 0002_discord_roster.sql's header and 0005_respect_game.sql's comments).
- * assertWritable must SKIP these rather than guess at a schema for them:
- * 0005 does ALTER a couple of their columns in, but that is not enough to
- * validate a whole payload against.
+ * 0002_discord_roster.sql's header and 0005_respect_game.sql's comments), so
+ * this parser has no CREATE TABLE to read their schema from.
+ *
+ * These are PARTIALLY covered, not uncovered: buildSchema() merges in a
+ * checked-in snapshot of their real column names (src/lib/testing/
+ * zaoos-schema.json, produced by scripts/refresh-zaoos-schema.mjs), so
+ * assertWritable rejects an unknown column on them exactly as it does for a
+ * table these migrations do create. What that snapshot does NOT give us:
+ * which columns are NOT NULL, and CHECK constraints - PostgREST's schema
+ * description exposes neither in a form safe to trust (its `required` array
+ * conflates real not-null columns with every auto-generated primary key; see
+ * scripts/refresh-zaoos-schema.mjs for why demanding a primary key on insert
+ * would reject every correct write). So these four tables get column-existence
+ * checking only - never call this list "fully covered", and see
+ * assertWritable.test.ts for a test that pins down exactly that boundary.
  */
-export const UNCOVERED_TABLES = [
+export const PARTIALLY_COVERED_TABLES = [
   'fractal_sessions',
   'fractal_scores',
   'respect_members',
@@ -199,8 +210,9 @@ function applyAddColumns(sql: string, model: SchemaModel): void {
     const [, tableName, colName, rest] = match;
     const table = model.tables.get(tableName);
     // A table these migrations never `create table`-d (e.g. fractal_sessions,
-    // owned by ZAO OS) stays uncovered rather than being half-guessed from a
-    // single ALTER. See UNCOVERED_TABLES.
+    // owned by ZAO OS) is left for buildSchema()'s ZAO OS fixture merge
+    // rather than being half-guessed from a single ALTER. See
+    // PARTIALLY_COVERED_TABLES.
     if (!table) continue;
 
     const stopAt = rest.search(COLUMN_STOP_WORDS);
@@ -233,6 +245,67 @@ function applyAddedChecks(sql: string, model: SchemaModel): void {
   }
 }
 
+/** Shape of src/lib/testing/zaoos-schema.json, written by
+ * scripts/refresh-zaoos-schema.mjs from the live ZAO OS PostgREST OpenAPI
+ * description. `format` is the Postgres type PostgREST reports (e.g. "uuid",
+ * "text", "timestamp with time zone") - kept for a human reading the fixture,
+ * not used for any enforcement decision. */
+export interface ZaoosSchemaProvenance {
+  sourceHost: string;
+  projectRef: string;
+  fetchedAtUtc: string;
+  /** The date by which this snapshot must be re-verified against the live
+   * database. See schemaFromMigrations.test.ts's freshness test, which fails
+   * once this date has passed, naming scripts/refresh-zaoos-schema.mjs as the
+   * fix - a time-bound claim nobody re-checks is worse than no claim at all. */
+  recheckBy: string;
+  note: string;
+}
+
+export interface ZaoosSchemaFixture {
+  provenance: ZaoosSchemaProvenance;
+  tables: Record<string, { columns: Record<string, { format: string | null }> }>;
+}
+
+/** Reads the checked-in ZAO OS schema snapshot. No network - CI has no
+ * credentials for that project, so this must work from the committed fixture
+ * alone. Exported (not just used internally) so a freshness test can check
+ * `provenance.recheckBy` without paying for a full buildSchema(). */
+export function loadZaoosSchema(
+  fixturePath = 'src/lib/testing/zaoos-schema.json',
+): ZaoosSchemaFixture {
+  return JSON.parse(readFileSync(fixturePath, 'utf8')) as ZaoosSchemaFixture;
+}
+
+/** Merges the ZAO OS fixture's four tables into `model` as column-existence-only
+ * schemas: every column is marked `notNull: false` with no `checkValues`, so
+ * assertWritable's not-null and CHECK logic - which does apply to the tables
+ * these migrations create - never fires for these four. Only "is this key a
+ * real column" is enforced. See PARTIALLY_COVERED_TABLES. */
+function applyZaoosColumnExistence(model: SchemaModel, fixture: ZaoosSchemaFixture): void {
+  for (const tableName of PARTIALLY_COVERED_TABLES) {
+    const tableFixture = fixture.tables[tableName];
+    if (!tableFixture) {
+      throw new Error(
+        `schemaFromMigrations: zaoos-schema.json has no entry for "${tableName}", one of ` +
+          `PARTIALLY_COVERED_TABLES. Re-run scripts/refresh-zaoos-schema.mjs.`,
+      );
+    }
+    const columns = new Map<string, ColumnSchema>();
+    for (const [colName, colSpec] of Object.entries(tableFixture.columns)) {
+      columns.set(colName, {
+        name: colName,
+        type: colSpec.format ?? 'unknown',
+        // Deliberately false for every column here, always - see the
+        // function doc comment. Not a parsed fact about the real column.
+        notNull: false,
+        hasDefault: true,
+      });
+    }
+    model.tables.set(tableName, { name: tableName, columns });
+  }
+}
+
 /** Builds a schema model from raw migration SQL, applied in the given order.
  * Later constraint changes win over earlier ones for the same column - this
  * is what lets a test build "schema as of migration N" by passing a prefix
@@ -255,11 +328,18 @@ export function parseMigrations(sqlTexts: string[], fileLabels: string[] = []): 
 }
 
 /** Builds the schema model from every *.sql file in migrationsDir, applied
- * in filename order (the same order Supabase applies them in). */
-export function buildSchema(migrationsDir = 'supabase/migrations'): SchemaModel {
+ * in filename order (the same order Supabase applies them in), then merges in
+ * column-existence-only coverage for PARTIALLY_COVERED_TABLES from the
+ * checked-in ZAO OS snapshot (zaoosFixturePath). */
+export function buildSchema(
+  migrationsDir = 'supabase/migrations',
+  zaoosFixturePath = 'src/lib/testing/zaoos-schema.json',
+): SchemaModel {
   const files = readdirSync(migrationsDir)
     .filter((f) => f.endsWith('.sql'))
     .sort();
   const sqlTexts = files.map((f) => readFileSync(path.join(migrationsDir, f), 'utf8'));
-  return parseMigrations(sqlTexts, files);
+  const model = parseMigrations(sqlTexts, files);
+  applyZaoosColumnExistence(model, loadZaoosSchema(zaoosFixturePath));
+  return model;
 }

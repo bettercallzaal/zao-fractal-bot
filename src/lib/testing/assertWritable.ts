@@ -17,9 +17,13 @@ export type WriteMode = 'insert' | 'update';
  *     payload - `update` payloads are partial by nature, so this rule does
  *     not apply to them
  *
- * A table the migrations do not define (see UNCOVERED_TABLES) is SKIPPED
- * silently - this function cannot validate what it has no schema for, and
- * guessing would be worse than skipping.
+ * A table with no schema entry at all is SKIPPED silently - this function
+ * cannot validate what it has no schema for, and guessing would be worse
+ * than skipping. In practice every table this codebase writes to has at
+ * least a column-existence schema: 8 tables from the migrations directly,
+ * plus 4 more (see PARTIALLY_COVERED_TABLES in schemaFromMigrations.ts) from
+ * a checked-in snapshot of the live ZAO OS project - those 4 get unknown-
+ * column rejection only, not CHECK or not-null enforcement.
  *
  * `payload` may be a single row object or an array of rows (inserting many
  * rows at once, as createSession does for the roster).

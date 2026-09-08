@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { assertWritable } from './assertWritable.js';
-import { buildSchema, parseMigrations, UNCOVERED_TABLES } from './schemaFromMigrations.js';
+import { buildSchema, parseMigrations, PARTIALLY_COVERED_TABLES } from './schemaFromMigrations.js';
 
 const migration = (name: string) =>
   readFileSync(`supabase/migrations/${name}.sql`, 'utf8');
@@ -86,20 +86,54 @@ describe('schema built from the full migration set', () => {
     ).not.toThrow();
   });
 
-  it('skips a table these migrations do not define, rather than guessing at it', () => {
-    // fractal_sessions lives in the ZAO OS project. These migrations only
-    // ever ALTER it (0005 adds meeting_number); they never CREATE it.
+  it('lists the four tables the migrations cannot see, so the gap is stated, not silent', () => {
+    expect(PARTIALLY_COVERED_TABLES).toEqual(
+      expect.arrayContaining(['fractal_sessions', 'fractal_scores', 'respect_members', 'users']),
+    );
+  });
+});
+
+describe('a PARTIALLY_COVERED_TABLES table - schema comes from the ZAO OS fixture, not a migration', () => {
+  // fractal_sessions lives in the ZAO OS project. These migrations only ever
+  // ALTER it (0005 adds meeting_number); they never CREATE it. buildSchema()
+  // fills the gap from src/lib/testing/zaoos-schema.json (see
+  // scripts/refresh-zaoos-schema.mjs), so this table is no longer skipped -
+  // it is checked for unknown columns, same as any table the migrations do
+  // create.
+  const schema = buildSchema();
+
+  it('rejects a column that is not real on the live table', () => {
     expect(() =>
-      assertWritable('fractal_sessions', { anything: 'goes', confidence: 'not-checked' }, schema),
+      assertWritable('fractal_sessions', { status: 'active', not_a_real_column: 1 }, schema),
+    ).toThrow(/not_a_real_column/);
+  });
+
+  it('accepts a payload using only real columns', () => {
+    expect(() =>
+      assertWritable(
+        'fractal_sessions',
+        { status: 'active', thread_id: 't1', guild_id: 'g1' },
+        schema,
+      ),
     ).not.toThrow();
   });
 
-  it('lists the tables it cannot cover, so the gap is visible', () => {
-    expect(UNCOVERED_TABLES).toEqual(
-      expect.arrayContaining(['fractal_sessions', 'fractal_scores', 'respect_members', 'users']),
-    );
-    for (const table of UNCOVERED_TABLES) {
-      expect(schema.tables.has(table)).toBe(false);
-    }
+  it('does NOT enforce not-null on insert - not even the primary key', () => {
+    // fractal_scores.required is ['id','member_name','score'] per PostgREST,
+    // and `id` is an auto-generated primary key - never supplied on insert.
+    // If this guard demanded it, completeSession's real (correct) insert
+    // would be rejected. See scripts/refresh-zaoos-schema.mjs.
+    expect(() =>
+      assertWritable('fractal_scores', { member_name: 'x' }, schema, 'insert'),
+    ).not.toThrow();
+  });
+
+  it('does NOT enforce CHECK constraints - PostgREST does not expose them here', () => {
+    // No CHECK values are known for any partially-covered table, so any value
+    // for any real column passes - this is the explicit, stated boundary of
+    // "column existence only", not an oversight.
+    expect(() =>
+      assertWritable('fractal_sessions', { status: 'not-a-real-status-value' }, schema),
+    ).not.toThrow();
   });
 });

@@ -1,0 +1,312 @@
+{
+  "provenance": {
+    "sourceHost": "efsxtoxvigqowjhgcbiz.supabase.co",
+    "projectRef": "efsxtoxvigqowjhgcbiz",
+    "fetchedAtUtc": "2026-09-08",
+    "recheckBy": "2026-12-07",
+    "note": "Column names and PostgREST formats only - column existence coverage, not not-null or CHECK enforcement. See scripts/refresh-zaoos-schema.mjs and PARTIALLY_COVERED_TABLES in src/lib/testing/schemaFromMigrations.ts."
+  },
+  "tables": {
+    "fractal_sessions": {
+      "columns": {
+        "id": {
+          "format": "uuid"
+        },
+        "session_date": {
+          "format": "date"
+        },
+        "name": {
+          "format": "text"
+        },
+        "host_name": {
+          "format": "text"
+        },
+        "host_wallet": {
+          "format": "text"
+        },
+        "scoring_era": {
+          "format": "text"
+        },
+        "participant_count": {
+          "format": "integer"
+        },
+        "notes": {
+          "format": "text"
+        },
+        "created_at": {
+          "format": "timestamp with time zone"
+        },
+        "thread_id": {
+          "format": "text"
+        },
+        "facilitator_discord_id": {
+          "format": "text"
+        },
+        "group_number": {
+          "format": "text"
+        },
+        "guild_id": {
+          "format": "text"
+        },
+        "completed_at": {
+          "format": "timestamp with time zone"
+        },
+        "discord_thread_id": {
+          "format": "text"
+        },
+        "status": {
+          "format": "text"
+        }
+      }
+    },
+    "fractal_scores": {
+      "columns": {
+        "id": {
+          "format": "uuid"
+        },
+        "session_id": {
+          "format": "uuid"
+        },
+        "member_name": {
+          "format": "text"
+        },
+        "wallet_address": {
+          "format": "text"
+        },
+        "rank": {
+          "format": "integer"
+        },
+        "score": {
+          "format": "numeric"
+        },
+        "created_at": {
+          "format": "timestamp with time zone"
+        },
+        "discord_id": {
+          "format": "text"
+        },
+        "level": {
+          "format": "integer"
+        },
+        "respect_points": {
+          "format": "integer"
+        }
+      }
+    },
+    "users": {
+      "columns": {
+        "id": {
+          "format": "uuid"
+        },
+        "primary_wallet": {
+          "format": "text"
+        },
+        "fid": {
+          "format": "bigint"
+        },
+        "username": {
+          "format": "text"
+        },
+        "display_name": {
+          "format": "text"
+        },
+        "pfp_url": {
+          "format": "text"
+        },
+        "bio": {
+          "format": "text"
+        },
+        "custody_address": {
+          "format": "text"
+        },
+        "verified_addresses": {
+          "format": "jsonb"
+        },
+        "ens_name": {
+          "format": "text"
+        },
+        "role": {
+          "format": "text"
+        },
+        "real_name": {
+          "format": "text"
+        },
+        "ign": {
+          "format": "text"
+        },
+        "notes": {
+          "format": "text"
+        },
+        "is_active": {
+          "format": "boolean"
+        },
+        "created_at": {
+          "format": "timestamp with time zone"
+        },
+        "updated_at": {
+          "format": "timestamp with time zone"
+        },
+        "last_login_at": {
+          "format": "timestamp with time zone"
+        },
+        "signer_uuid": {
+          "format": "text"
+        },
+        "respect_wallet": {
+          "format": "text"
+        },
+        "zid": {
+          "format": "integer"
+        },
+        "xmtp_address": {
+          "format": "text"
+        },
+        "bluesky_did": {
+          "format": "text"
+        },
+        "bluesky_handle": {
+          "format": "text"
+        },
+        "bluesky_app_password": {
+          "format": "text"
+        },
+        "solana_wallet": {
+          "format": "text"
+        },
+        "x_handle": {
+          "format": "text"
+        },
+        "instagram_handle": {
+          "format": "text"
+        },
+        "soundcloud_url": {
+          "format": "text"
+        },
+        "spotify_url": {
+          "format": "text"
+        },
+        "audius_handle": {
+          "format": "text"
+        },
+        "publishing_prefs": {
+          "format": "jsonb"
+        },
+        "lens_profile_id": {
+          "format": "text"
+        },
+        "lens_access_token": {
+          "format": "text"
+        },
+        "lens_refresh_token": {
+          "format": "text"
+        },
+        "hive_username": {
+          "format": "text"
+        },
+        "hive_posting_key_encrypted": {
+          "format": "text"
+        },
+        "preferred_wallet": {
+          "format": "text"
+        },
+        "member_tier": {
+          "format": "text"
+        },
+        "respect_member_id": {
+          "format": "uuid"
+        },
+        "community_profile_id": {
+          "format": "uuid"
+        },
+        "discord_id": {
+          "format": "text"
+        },
+        "tags": {
+          "format": "text[]"
+        },
+        "last_active_at": {
+          "format": "timestamp with time zone"
+        },
+        "github_handle": {
+          "format": "text"
+        },
+        "farcaster_banner_url": {
+          "format": "text"
+        },
+        "website_url": {
+          "format": "text"
+        },
+        "farcaster_registered_at": {
+          "format": "timestamp with time zone"
+        },
+        "location": {
+          "format": "text"
+        },
+        "neynar_score": {
+          "format": "real"
+        },
+        "zao_subname": {
+          "format": "text"
+        },
+        "hidden_wallets": {
+          "format": "text[]"
+        },
+        "messaging_prefs": {
+          "format": "jsonb"
+        }
+      }
+    },
+    "respect_members": {
+      "columns": {
+        "id": {
+          "format": "uuid"
+        },
+        "name": {
+          "format": "text"
+        },
+        "wallet_address": {
+          "format": "text"
+        },
+        "fid": {
+          "format": "bigint"
+        },
+        "total_respect": {
+          "format": "numeric"
+        },
+        "fractal_respect": {
+          "format": "numeric"
+        },
+        "event_respect": {
+          "format": "numeric"
+        },
+        "hosting_respect": {
+          "format": "numeric"
+        },
+        "bonus_respect": {
+          "format": "numeric"
+        },
+        "onchain_og": {
+          "format": "numeric"
+        },
+        "onchain_zor": {
+          "format": "numeric"
+        },
+        "first_respect_at": {
+          "format": "date"
+        },
+        "fractal_count": {
+          "format": "integer"
+        },
+        "hosting_count": {
+          "format": "integer"
+        },
+        "created_at": {
+          "format": "timestamp with time zone"
+        },
+        "updated_at": {
+          "format": "timestamp with time zone"
+        }
+      }
+    }
+  }
+}

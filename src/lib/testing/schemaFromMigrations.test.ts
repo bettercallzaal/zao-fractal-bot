@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildSchema, parseMigrations } from './schemaFromMigrations.js';
+import {
+  buildSchema,
+  loadZaoosSchema,
+  parseMigrations,
+  PARTIALLY_COVERED_TABLES,
+} from './schemaFromMigrations.js';
 
 describe('unparseable CHECK constraints fail loudly rather than being silently skipped', () => {
   // A guard that silently ignores a CHECK shape it cannot parse is worse than
@@ -115,5 +120,63 @@ describe('a `primary key` column implies NOT NULL, as Postgres does', () => {
     const col = schema.tables.get('discord_bot_heartbeats')?.columns.get('bot_name');
     expect(col?.notNull).toBe(true);
     expect(col?.hasDefault).toBe(false);
+  });
+});
+
+describe('the ZAO OS fixture closes the four uncovered tables to column-existence only', () => {
+  // fractal_sessions, fractal_scores, users, respect_members live in the ZAO
+  // OS project and are never `create table`-d by these migrations. buildSchema()
+  // merges in src/lib/testing/zaoos-schema.json (a snapshot taken by
+  // scripts/refresh-zaoos-schema.mjs) so a write to any of them is at least
+  // checked for an unknown column - the same exposure that let createSession's
+  // `confidence: 'manual'` insert ship, just on a table this repo cannot
+  // introspect from its own migrations.
+  const schema = buildSchema();
+
+  it('is present for all four PARTIALLY_COVERED_TABLES', () => {
+    for (const table of PARTIALLY_COVERED_TABLES) {
+      expect(schema.tables.has(table)).toBe(true);
+    }
+  });
+
+  it('knows fractal_scores.member_name is real and fractal_scores.nonsense_column is not', () => {
+    const fractalScores = schema.tables.get('fractal_scores');
+    expect(fractalScores?.columns.has('member_name')).toBe(true);
+    expect(fractalScores?.columns.has('nonsense_column')).toBe(false);
+  });
+
+  it('carries NO not-null or CHECK information for these tables - column existence only', () => {
+    // This is the boundary PARTIALLY_COVERED_TABLES documents: PostgREST's
+    // schema description conflates real not-null columns with every
+    // auto-generated primary key in its `required` array, and does not expose
+    // CHECK constraints at all - so neither is trustworthy enough to enforce.
+    // See scripts/refresh-zaoos-schema.mjs for the fractal_scores.id example
+    // that makes demanding `required` columns on insert actively wrong.
+    for (const table of PARTIALLY_COVERED_TABLES) {
+      for (const column of schema.tables.get(table)!.columns.values()) {
+        expect(column.notNull).toBe(false);
+        expect(column.checkValues).toBeUndefined();
+      }
+    }
+  });
+});
+
+describe('zaoos-schema.json must be re-verified before it goes stale', () => {
+  // A time-bound claim nobody re-checks is exactly the failure this whole
+  // exercise exists to close - so this test, not a comment or a calendar
+  // reminder, is what forces the re-check to actually happen.
+  it('fails once provenance.recheckBy has passed, naming the refresh script', () => {
+    const { provenance } = loadZaoosSchema();
+    const recheckBy = new Date(`${provenance.recheckBy}T00:00:00Z`);
+    const now = new Date();
+    if (now.getTime() > recheckBy.getTime()) {
+      throw new Error(
+        `src/lib/testing/zaoos-schema.json is stale: its recheckBy date ` +
+          `(${provenance.recheckBy}) has passed. Re-run ` +
+          `scripts/refresh-zaoos-schema.mjs against the ZAO OS project and commit ` +
+          `the refreshed fixture.`,
+      );
+    }
+    expect(now.getTime()).toBeLessThanOrEqual(recheckBy.getTime());
   });
 });
