@@ -2,6 +2,16 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { completeSession, createSession, loadSessionByThread, recordVote } from './gameRepo.js';
 import { startSession, votesNeeded } from '../game/session.js';
+import { assertWritable } from './testing/assertWritable.js';
+import { buildSchema } from './testing/schemaFromMigrations.js';
+
+// Built once from the real migrations so every write this fake records is
+// checked against the schema those migrations actually create - not just
+// accepted because the fake has no opinion. This is what would have caught
+// createSession's `confidence: 'manual'` insert before 0006 widened the
+// CHECK: see src/lib/testing/assertWritable.test.ts for the guard's own
+// tests.
+const schema = buildSchema();
 
 interface Call {
   table: string;
@@ -48,14 +58,20 @@ function fakeSupabase(opts: {
     from(table: string) {
       return {
         insert: (payload: unknown) => {
+          // update payloads are partial by nature (a resolveRound only sets
+          // winner_discord_id + resolved_at), so the not-null-presence rule
+          // applies to insert and upsert only - both write a full row.
+          assertWritable(table, payload, schema, 'insert');
           calls.push({ table, op: 'insert', payload });
           return builder(table, 'insert');
         },
         upsert: (payload: unknown) => {
+          assertWritable(table, payload, schema, 'insert');
           calls.push({ table, op: 'upsert', payload });
           return builder(table, 'upsert');
         },
         update: (payload: unknown) => {
+          assertWritable(table, payload, schema, 'update');
           calls.push({ table, op: 'update', payload });
           return builder(table, 'update');
         },
