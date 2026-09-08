@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { executeCommand } from './executeCommand.js';
+import { assertWritable } from '../lib/testing/assertWritable.js';
+import { buildSchema } from '../lib/testing/schemaFromMigrations.js';
+
+// Built once from the real migrations so every write these fakes record is
+// checked against the schema those migrations actually create, the same way
+// gameRepo.test.ts's fakeSupabase does. See src/lib/testing/fakeSupabase.ts.
+const schema = buildSchema();
 
 interface MockScenario {
   existingRows: Record<string, any>[];
@@ -10,8 +17,12 @@ function makeFakeSupabase(scenario: MockScenario) {
   const rows = scenario.existingRows;
 
   return {
-    from: () => ({
+    from: (table: string) => ({
       update: (values: Record<string, any>) => {
+        // Every update executeCommand issues here is a partial payload
+        // (claiming or finalizing a bot_commands row), so 'update' mode is
+        // correct - it does not require every not-null-no-default column.
+        assertWritable(table, values, schema, 'update');
         const isClaimUpdate = values.status === 'processing';
 
         if (isClaimUpdate) {
@@ -185,18 +196,19 @@ describe('executeCommand with UPDATE-based claiming', () => {
 });
 
 /** Records every table an action reads, and serves the claim/complete flow so
- * the action under test actually runs. The shared makeFakeSupabase above
- * ignores the table name, which is exactly why a query against a table that
- * does not exist passed CI for months: a mocked client cannot tell you a
- * relation is missing. This fake cannot either - so instead of pretending to
+ * the action under test actually runs. This fake cannot tell you a relation
+ * is missing - no mock can, which is exactly why a query against a table
+ * that does not exist passed CI for months - so instead of pretending to
  * check existence, it pins the set of tables an action reads, and that set is
- * checked against the live database by hand. */
+ * checked against the live database by hand. Its bot_commands updates are
+ * still run through assertWritable, same as makeFakeSupabase above. */
 function makeTableRecordingSupabase(idempotencyKey: string, tablesRead: string[]) {
   const row: Record<string, any> = { id: 'row-1', idempotency_key: idempotencyKey, status: 'pending' };
   return {
     from: (table: string) => ({
-      update: (values: Record<string, any>) =>
-        values.status === 'processing'
+      update: (values: Record<string, any>) => {
+        assertWritable(table, values, schema, 'update');
+        return values.status === 'processing'
           ? {
               eq: () => ({
                 eq: () => ({
@@ -204,7 +216,8 @@ function makeTableRecordingSupabase(idempotencyKey: string, tablesRead: string[]
                 }),
               }),
             }
-          : { eq: () => Promise.resolve({ error: null }) },
+          : { eq: () => Promise.resolve({ error: null }) };
+      },
       select: (_cols?: string) => {
         // A bare `.select()` that is awaited directly is a table read by an action.
         // The claim path never reaches here; it goes through `update`.
