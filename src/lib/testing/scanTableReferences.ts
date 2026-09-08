@@ -1,4 +1,4 @@
-// Statically enumerates every Supabase table this codebase's non-test source
+// Statically enumerates every Supabase table this codebase's product source
 // refers to via `.from('<table>')`, so a test can check each one against the
 // schema guard (schemaFromMigrations.ts / assertWritable.ts) without relying
 // on a test happening to exercise that write.
@@ -7,6 +7,11 @@
 // SKIPS a table it has no schema entry for, silently. A new table, a
 // typo'd name, or a table nobody wrote a test for goes completely
 // unguarded and reads exactly like covered code. See tableCoverage.test.ts.
+//
+// Scans src/**/*.ts, excluding *.test.ts files AND all of src/lib/testing/
+// (this file's own directory) - that directory is test infrastructure, not
+// product code, and nothing in it writes to Supabase in production, so
+// excluding it creates no blind spot for a real write.
 //
 // Design choice: this collects EVERY `.from('table')` call, not just ones
 // followed by `.insert`/`.upsert`/`.update`. Reliably distinguishing a read
@@ -26,7 +31,8 @@ import path from 'node:path';
 export interface TableScanResult {
   /** Distinct table names resolved from a literal `.from('name')` argument. */
   tables: Set<string>;
-  /** Non-test *.ts files under rootDir that were scanned. */
+  /** Non-test, non-testing-infrastructure *.ts files under rootDir that were
+   * scanned (see EXCLUDED_DIR_SUFFIX). */
   filesScanned: number;
   /** `.from(...)` call sites (other than `Array.from(...)`) whose argument
    * was not a simple quoted string, so no table name could be resolved
@@ -39,9 +45,17 @@ export interface TableScanResult {
   unresolvedSamples: string[];
 }
 
+// Test infrastructure, not product code - nothing under here writes to
+// Supabase in production, and this scanner itself lives in it. Excluding it
+// is a structural exclusion (skipped before its files are ever read), not a
+// convention anyone has to remember to follow while editing files in here.
+const EXCLUDED_DIR_SUFFIX = path.join('lib', 'testing');
+
 function listSourceFiles(rootDir: string): string[] {
   const out: string[] = [];
+  const excludedDir = path.join(rootDir, EXCLUDED_DIR_SUFFIX);
   const walk = (dir: string): void => {
+    if (dir === excludedDir) return;
     for (const entry of readdirSync(dir)) {
       const full = path.join(dir, entry);
       const stat = statSync(full);
@@ -114,8 +128,9 @@ function findFromCalls(src: string): Array<{ precedingIdentifier: string; arg: s
 const QUOTED_IDENTIFIER = /^(['"`])([A-Za-z_][A-Za-z0-9_]*)\1$/;
 
 /** Scans every non-test *.ts file under `rootDir` for Supabase table
- * references. See the file doc comment for why this collects all
- * `.from('table')` calls rather than trying to isolate writes. */
+ * references, skipping src/lib/testing/ (test infrastructure). See the file
+ * doc comment for why this collects all `.from('table')` calls rather than
+ * trying to isolate writes. */
 export function scanTableReferences(rootDir = 'src'): TableScanResult {
   const files = listSourceFiles(rootDir);
   const tables = new Set<string>();
@@ -137,11 +152,7 @@ export function scanTableReferences(rootDir = 'src'): TableScanResult {
       }
       unresolvedCount++;
       if (unresolvedSamples.length < 10) {
-        // Deliberately not written as a literal ".from(" substring here -
-        // this file is itself scanned (it is non-test source under src/),
-        // and a literal ".from(" in this string would match this scanner's
-        // own regex and report itself as an unresolved reference.
-        unresolvedSamples.push(`${path.relative(process.cwd(), file)}: from(${arg})`);
+        unresolvedSamples.push(`${path.relative(process.cwd(), file)}: .from(${arg})`);
       }
     }
   }
