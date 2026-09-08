@@ -286,6 +286,15 @@ describe('async membership survives a restart', () => {
     expect(loaded?.state.asyncEntrantIds).toEqual(['a1']);
     // The point of the test: the threshold is unchanged by the restart.
     expect(votesNeeded(loaded!.state)).toBe(2);
+
+    // The mock returns seeded data regardless of the columns asked for, so
+    // without this the test would still pass if `is_async` were dropped from
+    // the real query - and every restored session would silently come back
+    // all-voters. Assert on what was REQUESTED, not just what came back.
+    const rosterSelect = sb.calls.find(
+      (c) => c.table === 'discord_roster' && c.op === 'select',
+    )?.payload as string | undefined;
+    expect(rosterSelect).toContain('is_async');
   });
 });
 

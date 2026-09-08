@@ -162,10 +162,13 @@ export async function loadSessionByThread(
         displayName: r.display_name,
         wallet: r.wallet_address,
       })),
-      // is_async is typed nullable because a roster row written before
-      // migration 0006 has no value for it; filter treats null as false,
-      // which is the right default - an unmarked row is someone who was
-      // present.
+      // is_async is typed loosely on purpose. 0006 declares it `not null
+      // default false`, so the database itself can never return null - but a
+      // query that forgets to SELECT the column yields undefined for every
+      // row, and `filter(r => r.is_async)` would then quietly produce an
+      // all-voters session. Both falsy values collapse to "was present",
+      // which is the safe default. The test asserts the column is actually
+      // requested.
       asyncEntrantIds: rosterRows.filter((r) => r.is_async).map((r) => r.discord_id),
       winners,
       votes,
