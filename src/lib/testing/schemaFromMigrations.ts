@@ -205,18 +205,37 @@ function assertOnlyKnownCheckShapes(sql: string, fileLabel: string): void {
   }
 }
 
-// iterAddColumnStatements only recognises `add column if not exists`. An
-// `alter table ... add column <c> ...` that omits that literal phrase - a
-// perfectly ordinary, valid Postgres statement - never enters that regex, so
-// the column silently never joins the model. assertWritable then rejects a
-// correct payload as "no such column", blaming the payload for a gap in this
-// parser. That is the same "silently unconstrained" trap this whole guard
-// exists to catch, just moved from CHECK constraints to ALTER statements -
-// so this fails loudly at parse time instead, naming the migration and the
-// fragment, and pointing at iterAddColumnStatements as the function to teach
-// this shape.
+// Shared phrase fragments for "alter table ... add column if not exists" -
+// used by BOTH assertOnlyKnownAlterAddColumnShapes (the shape guard) and
+// iterAddColumnStatements (the collector that actually adds the column to
+// the model), so the two cannot silently disagree about which statements
+// this parser accepts. They used to be written as two separate regexes: the
+// guard tolerated whitespace variation (\s+) between keywords, the collector
+// required literal single spaces. A migration wrapped across lines, or
+// written with extra spaces, would pass the guard (it correctly saw "if not
+// exists" present) while the collector's stricter regex failed to match -
+// the column silently never joined the model, and assertWritable rejected a
+// correct insert as "no such column", accusing the payload for a gap
+// between two regexes that were supposed to agree. Building both from these
+// same fragments makes that drift structurally impossible, not just
+// currently absent.
+const ADD_COLUMN = String.raw`add\s+column`;
+const IF_NOT_EXISTS = String.raw`if\s+not\s+exists`;
+
+// An `alter table ... add column <c> ...` that omits the literal "if not
+// exists" phrase - a perfectly ordinary, valid Postgres statement - never
+// matches iterAddColumnStatements's regex, so the column silently never
+// joins the model. assertWritable then rejects a correct payload as "no
+// such column", blaming the payload for a gap in this parser. That is the
+// same "silently unconstrained" trap this whole guard exists to catch, just
+// moved from CHECK constraints to ALTER statements - so this fails loudly
+// at parse time instead, naming the migration and the fragment, and
+// pointing at iterAddColumnStatements as the function to teach this shape.
 function assertOnlyKnownAlterAddColumnShapes(sql: string, fileLabel: string): void {
-  const re = /alter\s+table\s+public\.\w+\s+add\s+column\s+(?!if\s+not\s+exists\b)\S+/gi;
+  const re = new RegExp(
+    String.raw`alter\s+table\s+public\.\w+\s+${ADD_COLUMN}\s+(?!${IF_NOT_EXISTS}\b)\S+`,
+    'gi',
+  );
   let match: RegExpExecArray | null;
   while ((match = re.exec(sql))) {
     throw new Error(
@@ -308,7 +327,13 @@ interface AddColumnStatement {
  * PARTIALLY_COVERED_TABLES table like fractal_sessions, to compute the
  * union with the ZAO OS snapshot and to report pendingMigrationColumns()). */
 function* iterAddColumnStatements(sql: string): Generator<AddColumnStatement> {
-  const re = /alter table public\.(\w+)\s+add column if not exists\s+(\w+)\s+([^;]*);/gi;
+  // Built from the same ADD_COLUMN/IF_NOT_EXISTS fragments as
+  // assertOnlyKnownAlterAddColumnShapes - see the comment there for why
+  // that matters: these two must never accept different sets of statements.
+  const re = new RegExp(
+    String.raw`alter\s+table\s+public\.(\w+)\s+${ADD_COLUMN}\s+${IF_NOT_EXISTS}\s+(\w+)\s+([^;]*);`,
+    'gi',
+  );
   let match: RegExpExecArray | null;
   while ((match = re.exec(sql))) {
     const [, tableName, colName, rest] = match;

@@ -145,6 +145,44 @@ describe('an "alter table ... add column" without the literal "if not exists" fa
   });
 });
 
+describe('the shape guard and the collector agree about whitespace inside "add column if not exists"', () => {
+  // assertOnlyKnownAlterAddColumnShapes tolerates whitespace variation
+  // (\s+) between keywords. iterAddColumnStatements - the function that
+  // actually adds the column to the model - used to require literal single
+  // spaces. A migration wrapped across lines, or written with extra spaces,
+  // would pass the guard (it correctly sees "if not exists" present, so
+  // nothing throws) while the collector's stricter regex failed to match -
+  // the column silently never joined the model, and assertWritable rejected
+  // a correct insert as "no such column", blaming the payload for a gap
+  // between two regexes that were supposed to agree. Both now build off the
+  // same shared phrase constants, so they cannot drift apart again.
+  const sql = `
+    create table if not exists public.some_table (
+      id uuid primary key default gen_random_uuid()
+    );
+
+    alter table public.some_table
+      add column  if not exists
+      is_async boolean not null default false;
+  `;
+
+  it('does not throw the shape guard - "if not exists" is present', () => {
+    expect(() => parseMigrations([sql], ['0099_wrapped_add_column.sql'])).not.toThrow();
+  });
+
+  it('the column is present in the built schema, not silently dropped', () => {
+    const schema = parseMigrations([sql], ['0099_wrapped_add_column.sql']);
+    expect(schema.tables.get('some_table')?.columns.has('is_async')).toBe(true);
+  });
+
+  it('a write using the column is accepted', () => {
+    const schema = parseMigrations([sql], ['0099_wrapped_add_column.sql']);
+    expect(() =>
+      assertWritable('some_table', { is_async: true }, schema, 'insert'),
+    ).not.toThrow();
+  });
+});
+
 describe('a "create table if not exists" that re-declares an already-modeled table fails loudly', () => {
   // applyCreateTables replaces a table's column model wholesale. A LATER
   // migration that re-declares a table this parser already has a model for
