@@ -67,6 +67,23 @@ describe('seatGroups - invariants', () => {
     }
   });
 
+  it('someone present and also in eligibleAsync is seated once, as a voter, never deferred', () => {
+    // Alice submitted async, then showed up. Attending supersedes submitting:
+    // she must not consume two seats, and she must not be silently dropped
+    // from both the voter count and the async pool.
+    const alice: Participant = { discordId: 'alice', displayName: 'alice', wallet: null };
+    const voters = [alice, ...people('v', 5)];
+    const eligibleAsync = [alice, ...people('a', 2)];
+    const s = seatGroups({ voters, eligibleAsync });
+
+    const seatedVoterIds = s.groups.flatMap((g) => g.voters.map((p) => p.discordId));
+    const seatedAsyncIds = s.groups.flatMap((g) => g.asyncEntrants.map((p) => p.discordId));
+
+    expect(seatedVoterIds.filter((id) => id === 'alice')).toEqual(['alice']);
+    expect(seatedAsyncIds).not.toContain('alice');
+    expect(s.deferred.map((p) => p.discordId)).not.toContain('alice');
+  });
+
   it('distributes voters before async entrants', () => {
     // 7 voters + 5 async: voters split 4/3 first, then async fills the
     // emptier group first. No group ends short of voters while another

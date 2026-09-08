@@ -350,3 +350,64 @@ describe('loadSessionByThread', () => {
     expect(restored?.state.meetingNumber).toBe(111);
   });
 });
+
+describe('loadSessionByThread - restored roster guards', () => {
+  // captureRoster (executeCommand.ts) deletes every discord_roster row for a
+  // session_id and replaces it with a presence snapshot. Aimed at a live
+  // fractal's session id, that would swap the game roster for an
+  // arbitrary-sized one underneath a running game. loadSessionByThread builds
+  // GameState directly from these rows - bypassing startSession, so none of
+  // its guards run - and finalRanking pays RESPECT_POINTS[6] ?? 0 for a
+  // seventh candidate: zero Respect, silently. These two guards make that
+  // branch fail loudly instead.
+
+  const sessionRow = (id: string) => ({
+    'fractal_sessions.select': {
+      data: { id, meeting_number: 1, group_number: '1', thread_id: 't1', status: 'active' },
+      error: null,
+    },
+  });
+
+  it('throws when the restored roster holds more than MAX_GROUP_MEMBERS candidates', async () => {
+    const rows = Array.from({ length: 7 }, (_, i) => ({
+      discord_id: `u${i + 1}`,
+      display_name: `u${i + 1}`,
+      wallet_address: null,
+      is_async: false,
+    }));
+    const sb = fakeSupabase({
+      results: {
+        ...sessionRow('sess-big'),
+        'discord_roster.select': { data: rows, error: null },
+        'discord_fractal_rounds.select': { data: [], error: null },
+      },
+    });
+
+    await expect(loadSessionByThread(sb as never, 't1')).rejects.toThrow(RangeError);
+    await expect(loadSessionByThread(sb as never, 't1')).rejects.toThrow(/sess-big/);
+  });
+
+  it('throws when a roster row is_async but has no place among the restored participants', async () => {
+    // discord_id is nullable on discord_roster (0002: "null for manual
+    // name-only entries"). A row with no discord_id cannot be a Participant,
+    // so it is dropped when the participant list is built - but if that same
+    // row is flagged is_async, the flag now points at nobody. That mismatch
+    // is exactly the kind of roster corruption these guards exist to catch.
+    const rows = [
+      { discord_id: 'v1', display_name: 'v1', wallet_address: null, is_async: false },
+      { discord_id: 'v2', display_name: 'v2', wallet_address: null, is_async: false },
+      { discord_id: 'v3', display_name: 'v3', wallet_address: null, is_async: false },
+      { discord_id: null, display_name: 'ghost', wallet_address: null, is_async: true },
+    ];
+    const sb = fakeSupabase({
+      results: {
+        ...sessionRow('sess-ghost'),
+        'discord_roster.select': { data: rows, error: null },
+        'discord_fractal_rounds.select': { data: [], error: null },
+      },
+    });
+
+    await expect(loadSessionByThread(sb as never, 't1')).rejects.toThrow(RangeError);
+    await expect(loadSessionByThread(sb as never, 't1')).rejects.toThrow(/sess-ghost/);
+  });
+});

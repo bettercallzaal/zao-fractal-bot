@@ -15,6 +15,7 @@
 // Supabase project has its own unrelated bot_commands table with different
 // columns - see spec section 4 before pointing this anywhere else.
 
+import { MAX_GROUP_MEMBERS } from '@fractalbot/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { GameState, RankedMember } from '../game/session.js';
 
@@ -146,8 +147,58 @@ export async function loadSessionByThread(
     discord_id: string;
     display_name: string;
     wallet_address: string | null;
-    is_async: boolean | null;
+    // Widened past what 0006 declares (`not null default false`) because the
+    // real risk isn't the database returning null - it's a query that
+    // forgets to SELECT the column, which yields undefined for every row.
+    // `filter(r => r.is_async)` treats every falsy value as "was present",
+    // which is the safe default, but the type should admit the case the
+    // comment describes. The test asserts the column is actually requested.
+    is_async: boolean | null | undefined;
   }[];
+
+  // This literal build bypasses startSession, so none of ITS guards run -
+  // and finalRanking pays RESPECT_POINTS[6] ?? 0 for a seventh candidate:
+  // zero Respect, silently. That is reachable here: captureRoster
+  // (executeCommand.ts) deletes every discord_roster row for a session_id
+  // and replaces it with a presence snapshot. Aimed at a live fractal's
+  // session id, it would swap the game roster for an arbitrary-sized one and
+  // strip is_async underneath a running game. Failing loudly beats silently
+  // paying somebody zero, so both checks below throw rather than truncate or
+  // guess, and name the session id so whoever sees this knows the database
+  // changed under a live game.
+  if (rosterRows.length > MAX_GROUP_MEMBERS) {
+    throw new RangeError(
+      `loadSessionByThread: restored roster for session ${row.id} is inconsistent - ` +
+        `a fractal group holds at most ${MAX_GROUP_MEMBERS} candidates, but discord_roster ` +
+        `has ${rosterRows.length} rows for this session. The database was changed underneath a live game.`,
+    );
+  }
+
+  // discord_id is nullable on discord_roster (0002: "null for manual
+  // name-only entries"). Such a row cannot be a game Participant - nothing
+  // downstream can vote for or rank an id that doesn't exist - so it is
+  // dropped here rather than smuggled into the restored state with a null
+  // discordId.
+  const participants = rosterRows
+    .filter((r) => !!r.discord_id)
+    .map((r) => ({
+      discordId: r.discord_id,
+      displayName: r.display_name,
+      wallet: r.wallet_address,
+    }));
+
+  const asyncEntrantIds = rosterRows.filter((r) => r.is_async).map((r) => r.discord_id);
+
+  const participantIds = new Set(participants.map((p) => p.discordId));
+  for (const id of asyncEntrantIds) {
+    if (!participantIds.has(id)) {
+      throw new RangeError(
+        `loadSessionByThread: restored roster for session ${row.id} is inconsistent - ` +
+          `discord_id "${id}" is marked is_async but is not among the restored participants. ` +
+          `The database was changed underneath a live game.`,
+      );
+    }
+  }
 
   return {
     sessionId: row.id,
@@ -157,19 +208,8 @@ export async function loadSessionByThread(
       groupNumber: row.group_number ?? '1',
       status: row.status,
       currentLevel,
-      participants: rosterRows.map((r) => ({
-        discordId: r.discord_id,
-        displayName: r.display_name,
-        wallet: r.wallet_address,
-      })),
-      // is_async is typed loosely on purpose. 0006 declares it `not null
-      // default false`, so the database itself can never return null - but a
-      // query that forgets to SELECT the column yields undefined for every
-      // row, and `filter(r => r.is_async)` would then quietly produce an
-      // all-voters session. Both falsy values collapse to "was present",
-      // which is the safe default. The test asserts the column is actually
-      // requested.
-      asyncEntrantIds: rosterRows.filter((r) => r.is_async).map((r) => r.discord_id),
+      participants,
+      asyncEntrantIds,
       winners,
       votes,
     },

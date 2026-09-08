@@ -32,6 +32,16 @@
 -- already-migrated database. Matching on the constraint definition removes the
 -- assumption. Scoped to checks mentioning `confidence`, so no other constraint
 -- on the table is touched.
+--
+-- The drop and the add live in the SAME do $$ ... $$ block, not two separate
+-- statements. This file is concatenated with 0001-0005 into one combined
+-- script that is already wrapped in an outer begin;/commit;, so this file
+-- must not add its own transaction control - a nested commit would commit
+-- the outer transaction early and destroy the all-or-nothing guarantee for
+-- the whole run. A do block executes as a single statement, so putting both
+-- the drop and the add inside it makes drop-then-add atomic (both happen or
+-- neither does, even run statement-by-statement by hand) without touching
+-- begin/commit at all.
 do $$
 declare c record;
 begin
@@ -47,11 +57,13 @@ begin
   loop
     execute format('alter table public.discord_roster drop constraint %I', c.conname);
   end loop;
-end $$;
 
-alter table public.discord_roster
-  add constraint discord_roster_confidence_check
-  check (confidence in ('registry', 'exact', 'fuzzy', 'ambiguous', 'none', 'manual'));
+  execute $c1$
+    alter table public.discord_roster
+      add constraint discord_roster_confidence_check
+      check (confidence in ('registry', 'exact', 'fuzzy', 'ambiguous', 'none', 'manual'))
+  $c1$;
+end $$;
 
 alter table public.discord_roster
   add column if not exists is_async boolean not null default false;

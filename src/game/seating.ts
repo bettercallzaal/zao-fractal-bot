@@ -15,7 +15,12 @@ export interface SeatingInput {
   /** Present in the room. */
   voters: Participant[];
   /** Already gated and window-filtered, EARLIEST SUBMISSION FIRST. Order is
-   * the deferral rule - see asyncEligibility.ts. */
+   * the deferral rule - see asyncEligibility.ts. May still contain someone
+   * who is also in `voters` (an async submitter who then showed up) -
+   * eligibleAsyncEntrants dedups within submissions but has no visibility
+   * into who is in the room. seatGroups is responsible for removing that
+   * overlap: attending supersedes submitting, so anyone in both is seated
+   * once, as a voter, and is neither an async entrant nor deferred. */
   eligibleAsync: Participant[];
 }
 
@@ -32,7 +37,14 @@ export interface Seating {
 }
 
 export function seatGroups(input: SeatingInput): Seating {
-  const { voters, eligibleAsync } = input;
+  const { voters } = input;
+
+  // 0. Attending supersedes submitting. Someone present in the room who also
+  // has an async submission is a voter, not an async entrant - drop them
+  // from the async pool before admitting anyone, so they are seated exactly
+  // once (as a voter) and never appear in `deferred`.
+  const voterIds = new Set(voters.map((v) => v.discordId));
+  const eligibleAsync = input.eligibleAsync.filter((p) => !voterIds.has(p.discordId));
 
   // 1. Admit. Below the floor, nobody is admitted (spec 3.2).
   const admitted = voters.length < MIN_VOTERS ? [] : eligibleAsync;

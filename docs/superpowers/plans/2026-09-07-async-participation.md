@@ -65,7 +65,7 @@ The existing tests pass because `gameRepo.test.ts` mocks Supabase - a check cons
 
 `'manual'` is the right value to keep, not a bug in the caller: the other five are *name-resolution* confidences from `nameResolver.ts`, and a facilitator naming the group at `/start` is a different provenance from `'none'`, which means "we tried to resolve this person and failed". Writing `'none'` would make the `/fractals` dashboard show facilitator-confirmed members as unresolved. So the constraint widens.
 
-The migration is written to be correct whether or not `0002` has already been applied.
+The migration requires `0002` to have already run - `alter table public.discord_roster` errors immediately if the table doesn't exist yet. Only the constraint NAME lookup is order-independent (it matches on the constraint's definition rather than a guessed name, so it does not care whether 0002's original unnamed check has been renamed by Postgres); the table itself is a hard prerequisite. If 0002 has not run, 0006 fails loudly rather than silently doing nothing.
 
 **Files:**
 - Create: `supabase/migrations/0006_async_participation.sql`
@@ -1234,7 +1234,7 @@ Expected: PASS, including the pre-existing `votingView.test.ts` cases - the thir
 - [ ] **Step 5: Full suite, typecheck and architecture**
 
 Run: `npx vitest run && npx tsc --noEmit`
-Expected: all pass. `src/architecture.test.ts` in particular must still pass - `seating.ts` and `asyncEligibility.ts` import no discord.js.
+Expected: all pass. `src/architecture.test.ts` in particular must still pass - it scans only `src/game` and `src/commands`, so it enforces this for `seating.ts` but not for `asyncEligibility.ts`, which lives under `src/lib`. `asyncEligibility.ts` genuinely imports no discord.js; that fact just isn't the thing this test checks.
 
 - [ ] **Step 6: Commit**
 
