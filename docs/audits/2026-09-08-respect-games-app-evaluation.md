@@ -2,6 +2,12 @@
 
 > Zaal, 2026-09-08: evaluate it before building more, same call he made on herdr.
 > **Verdict: KEEP BUILDING.** Reasons below, each measured today.
+>
+> **RE-VERIFY BY 2026-12-08 (3 months).** This verdict rests on someone else's repos being
+> dormant. Dormant is a state, not a fact - Optimystics could ship tomorrow and the whole
+> answer changes. Past that date, re-check the push dates before citing this verdict, and
+> correct it at the top of this file. The licence findings and the contract-mismatch finding
+> do not decay the same way; the activity claims do.
 
 Searched the research library first (`zao-research-index`). **The library already held the
 answer** - `governance/982-fresh-fractal-bot-rebuild-stack`, the stack-decision doc for this
@@ -65,6 +71,10 @@ finding that decides it.**
 blog, with attention moved to Eden Fractal.
 
 A README nobody replaced is a fair proxy for how much external adoption was expected.
+
+*(Every date in that table is a GitHub push timestamp read on 2026-09-08. **Re-verify by
+2026-12-08.** "Dormant since May 2025" is exactly the kind of claim that stays loud after it
+stops being true.)*
 
 ## 4. Licence - read from the LICENSE file, not the API field
 

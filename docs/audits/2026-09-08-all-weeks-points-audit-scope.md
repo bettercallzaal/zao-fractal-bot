@@ -8,6 +8,12 @@ Every figure below was measured on 2026-09-08 against the live ZAO OS project
 (`efsxtoxvigqowjhgcbiz`) over REST, and against the branch's own source. Nothing is
 recalled.
 
+> **RE-VERIFY BY 2026-09-22.** Every count here is a snapshot of a live database that is
+> expected to change: migrations 0001-0006 are pending, and once they land the bot starts
+> writing sessions again. Past that date, re-run the measurements before acting on any
+> number below - and correct them at the TOP of this file, not only in the section you
+> happen to be editing.
+
 **Respect is not money.** This document does not describe any period as unpaid, owed,
 or a debt, and Zaal has made no decision to mint anything.
 
@@ -46,7 +52,9 @@ scored, and reached chain, with no database record at all.**
 
 This is where the unknown **period 103** sits - inside the blackout, not adjacent to it.
 
-**Source of truth for Class A is the chain, not Discord.** Reconstruction means reading
+**Source of truth for Class A is the chain, not Discord.** *(Weekly-mint claim measured
+2026-08-31 by this lane; **re-verify by 2026-09-22** - it is a statement about an ongoing
+external process and decays.)* Reconstruction means reading
 mint transactions per week and mapping amounts back to ranks. What the chain cannot give
 back is the human layer: names, group composition, facilitator, who attended and earned
 nothing.
@@ -60,18 +68,39 @@ nothing.
 Class B is the subtlest class: these periods *look* present in any count of sessions and
 are silently short on results.
 
-### Class C - identity coverage on existing scores
+### Class C - identity coverage, and a column that lies
 
-| Field | Missing |
-|---|---|
-| `discord_id` | **771 of 801** (96%) |
-| `respect_points` | **771 of 801** (96%) |
-| `wallet_address` | **43 of 801** (5%) |
+> **Corrected 2026-09-08, same day.** An earlier draft of this section said 96% of rows
+> "carry no value in `respect_points`". That was wrong, and wrong in the direction that
+> matters. Re-measured distinguishing null from zero:
 
-96% of score rows cannot be attributed to a Discord identity, and 96% carry no value in
-`respect_points` - the `score` column appears to hold it instead for those rows.
-**Which column is authoritative is an open question and must be settled before any
-totalling**, or every sum will be wrong in the same direction.
+| Field | null | zero | genuinely present |
+|---|---|---|---|
+| `discord_id` | **771** | - | 30 |
+| `wallet_address` | 43 | - | 758 |
+| `respect_points` | **0** | **771** | 30 |
+
+`respect_points` is **never null. It is zero on 771 of 801 rows.** That is a *wrong value,
+not a missing one*, and it is more dangerous: a null is skipped by any honest sum, a zero
+is silently added. Anything totalling this column today reports that 96% of all Respect
+ever awarded was zero.
+
+**Which column is authoritative: `score`. Measured, not asked.**
+
+| Column | Non-null | Matches the `RESPECT_POINTS` ladder by rank |
+|---|---|---|
+| `score` | 801 | **489** |
+| `respect_points` | 801 (771 of them zero) | **30** |
+
+`score` holds era-appropriate values (its distinct values include 2, 5, 8, 9, 13, 21, 22,
+23, 31 - the smaller 1x-era numbers - alongside the ladder). `respect_points` holds only
+`{0, 10, 16, 26, 42, 68, 110}`, i.e. the 2x ladder or nothing.
+
+The same **30 rows** carry both a `discord_id` and a non-zero `respect_points`, against 7
+bot-written sessions. So one narrow slice was written properly and the rest was not.
+
+**Use `score`. Treat `respect_points` as unpopulated except on those 30 rows**, and do not
+sum it.
 
 ### Class D - unparseable and missing entries
 
@@ -106,9 +135,10 @@ not a safe assumption when reconstructing.
 
 Four passes, in dependency order. Each is independently useful and can stop.
 
-1. **Settle the schema questions.** Which of `score` / `respect_points` is authoritative;
-   how eras normalise; whether a period's group count is knowable. Nothing else is
-   trustworthy until these are answered. *Mostly decisions, not work.*
+1. **Settle the remaining schema questions.** The authoritative-column question is
+   **already answered - it is `score`**, measured, see Class C. What is left: how the
+   1x / 2x / ORDAO eras normalise against each other, and whether a period's true group
+   count is knowable. Both are genuine decisions, not measurements.
 2. **Reconcile what exists** (periods 1-92). Per period: how many groups ran, how many
    have scores, do the scores form a valid ladder, do totals match chain. Produces a
    per-period completeness table and turns Class B from "18 periods look odd" into a
@@ -126,9 +156,11 @@ no database. An audit can *read* today; it cannot record its findings until thos
 
 ---
 
-## 5. What I would ask before starting
+## 5. What actually blocks starting
 
-- **Which column is authoritative, `score` or `respect_points`?** Blocks every total.
+One question was on this list and has been removed: *which column is authoritative*. It was
+answerable by measurement rather than by asking, so it was measured - see Class C. `score`.
+
 - **Is the goal a report, or corrected data?** A read-only reconciliation is much cheaper
   than a backfill, and only the second needs decisions about writing to history.
 - **Does the blackout get reconstructed at all**, or is the chain considered a sufficient
