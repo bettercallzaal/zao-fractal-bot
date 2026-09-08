@@ -155,6 +155,9 @@ export async function loadSessionByThread(
         displayName: r.display_name,
         wallet: r.wallet_address,
       })),
+      // No async-entrant persistence yet - every restored session is all-voters
+      // until that lands. See src/game/session.ts GameState.asyncEntrantIds.
+      asyncEntrantIds: [],
       winners,
       votes,
     },
