@@ -62,12 +62,16 @@ describe('async entrants are visibly marked', () => {
     expect(new Set(styles).size).toBe(2);
   });
 
-  it('keeps the label inside Discord 80-character cap', () => {
+  it('keeps the label inside the Discord 80-character cap WITH the marker intact', () => {
     const long = [{ discordId: 'a1', displayName: 'x'.repeat(200), wallet: null }];
     const rows = buildVotingRows('t1', long, ['a1']);
     const component = rows[0].toJSON().components[0];
     const label = 'label' in component ? (component.label ?? '') : '';
-    expect(label.length).toBeLessThanOrEqual(80);
+    // Exact, not just a length bound. Truncating the concatenated string
+    // instead of reserving room for the suffix would cut "(async)" in half
+    // and still satisfy a length-only assertion.
+    expect(label).toBe('x'.repeat(72) + ' (async)');
+    expect(label.length).toBe(80);
   });
 
   it('is unchanged when no async ids are given', () => {

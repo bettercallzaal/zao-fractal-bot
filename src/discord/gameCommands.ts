@@ -31,7 +31,7 @@ export const startCommand = new SlashCommandBuilder()
     o.setName('group').setDescription('Group number, e.g. 1').setRequired(true),
   );
 
-function votingPrompt(state: GameState, awaiting: number): string {
+export function votingPrompt(state: GameState, awaiting: number): string {
   // voters(state), not participants: with 4 present and 2 async this used to
   // read "all 6 have voted" while the round resolved at 4.
   const voterCount = voters(state).length;
