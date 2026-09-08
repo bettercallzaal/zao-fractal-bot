@@ -51,6 +51,11 @@ export async function createSession(
   // The roster is persisted here, not just held in memory, because
   // loadSessionByThread rehydrates participants from it after a restart.
   // Without this write, resume would come back with an empty group.
+  //
+  // is_async has to be on the row for the same reason: rehydrating an async
+  // entrant as a voter would raise votesNeeded mid-fractal and the round would
+  // wait forever on someone who cannot vote.
+  const isAsync = new Set(state.asyncEntrantIds);
   const roster = await sb.from('discord_roster').insert(
     state.participants.map((p) => ({
       session_id: sessionId,
@@ -59,6 +64,7 @@ export async function createSession(
       wallet_address: p.wallet,
       sources: ['thread'],
       confidence: 'manual',
+      is_async: isAsync.has(p.discordId),
       captured_at: new Date().toISOString(),
     })),
   );
@@ -91,7 +97,7 @@ export async function loadSessionByThread(
 
   const roster = await sb
     .from('discord_roster')
-    .select('discord_id, display_name, wallet_address')
+    .select('discord_id, display_name, wallet_address, is_async')
     .eq('session_id', row.id);
   if (roster.error) throw new Error(`loadSessionByThread (roster): ${roster.error.message}`);
 
@@ -136,6 +142,13 @@ export async function loadSessionByThread(
       ? Math.min(...winners.map((w) => w.level)) - 1
       : 6;
 
+  const rosterRows = (roster.data ?? []) as {
+    discord_id: string;
+    display_name: string;
+    wallet_address: string | null;
+    is_async: boolean | null;
+  }[];
+
   return {
     sessionId: row.id,
     state: {
@@ -144,20 +157,16 @@ export async function loadSessionByThread(
       groupNumber: row.group_number ?? '1',
       status: row.status,
       currentLevel,
-      participants: (
-        (roster.data ?? []) as {
-          discord_id: string;
-          display_name: string;
-          wallet_address: string | null;
-        }[]
-      ).map((r) => ({
+      participants: rosterRows.map((r) => ({
         discordId: r.discord_id,
         displayName: r.display_name,
         wallet: r.wallet_address,
       })),
-      // No async-entrant persistence yet - every restored session is all-voters
-      // until that lands. See src/game/session.ts GameState.asyncEntrantIds.
-      asyncEntrantIds: [],
+      // is_async is typed nullable because a roster row written before
+      // migration 0006 has no value for it; filter treats null as false,
+      // which is the right default - an unmarked row is someone who was
+      // present.
+      asyncEntrantIds: rosterRows.filter((r) => r.is_async).map((r) => r.discord_id),
       winners,
       votes,
     },

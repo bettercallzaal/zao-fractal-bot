@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { completeSession, createSession, loadSessionByThread, recordVote } from './gameRepo.js';
-import { startSession } from '../game/session.js';
+import { startSession, votesNeeded } from '../game/session.js';
 
 interface Call {
   table: string;
@@ -222,6 +222,70 @@ describe('completeSession', () => {
     const update = sb.calls.find((c) => c.table === 'fractal_sessions' && c.op === 'update')
       ?.payload as Record<string, unknown>;
     expect(update.status).toBe('completed');
+  });
+});
+
+describe('async membership survives a restart', () => {
+  it('createSession marks async entrants on their roster rows', async () => {
+    const sb = fakeSupabase({ results: sessionInsertOk });
+    const asyncState = startSession({
+      threadId: 't1',
+      meetingNumber: 92,
+      groupNumber: '1',
+      participants: ['v1', 'v2', 'v3', 'a1'].map((id) => ({
+        discordId: id,
+        displayName: id,
+        wallet: null,
+      })),
+      asyncEntrantIds: ['a1'],
+    });
+
+    await createSession(sb as never, {
+      state: asyncState,
+      name: 'ZAO Fractal 92 - Group 1',
+      guildId: 'g1',
+      facilitatorDiscordId: 'f1',
+    });
+
+    const rows = sb.calls.find((c) => c.table === 'discord_roster')?.payload as {
+      discord_id: string;
+      is_async: boolean;
+    }[];
+    expect(rows.find((r) => r.discord_id === 'a1')?.is_async).toBe(true);
+    expect(rows.find((r) => r.discord_id === 'v1')?.is_async).toBe(false);
+  });
+
+  it('loadSessionByThread rehydrates asyncEntrantIds', async () => {
+    const sb = fakeSupabase({
+      results: {
+        'fractal_sessions.select': {
+          data: {
+            id: 's1',
+            meeting_number: 92,
+            group_number: '1',
+            thread_id: 't1',
+            status: 'active',
+          },
+          error: null,
+        },
+        'discord_roster.select': {
+          data: [
+            { discord_id: 'v1', display_name: 'v1', wallet_address: null, is_async: false },
+            { discord_id: 'v2', display_name: 'v2', wallet_address: null, is_async: false },
+            { discord_id: 'v3', display_name: 'v3', wallet_address: null, is_async: false },
+            { discord_id: 'a1', display_name: 'a1', wallet_address: null, is_async: true },
+          ],
+          error: null,
+        },
+        'discord_fractal_rounds.select': { data: [], error: null },
+      },
+    });
+
+    const loaded = await loadSessionByThread(sb as never, 't1');
+
+    expect(loaded?.state.asyncEntrantIds).toEqual(['a1']);
+    // The point of the test: the threshold is unchanged by the restart.
+    expect(votesNeeded(loaded!.state)).toBe(2);
   });
 });
 
