@@ -13,6 +13,11 @@ recalled.
 > writing sessions again. Past that date, re-run the measurements before acting on any
 > number below - and correct them at the TOP of this file, not only in the section you
 > happen to be editing.
+>
+> Figures that carry a `zao-measure` citation comment were re-run and confirmed as of the
+> timestamp in that comment; `zao-measure --verify` re-runs the exact query named in the
+> comment and reports whether the figure still holds. A figure with no citation was not
+> re-verified by that tool and should not be read as more current than the document date.
 
 **Respect is not money.** This document does not describe any period as unpaid, owed,
 or a debt, and Zaal has made no decision to mint anything.
@@ -20,6 +25,8 @@ or a debt, and Zaal has made no decision to mint anything.
 ---
 
 ## 1. What exists
+
+<!-- measured 2026-09-08T19:20Z - zao-measure --verify "zaofractal: fractal ledger shape" -->
 
 | | |
 |---|---|
@@ -73,6 +80,8 @@ are silently short on results.
 > **Corrected 2026-09-08, same day.** An earlier draft of this section said 96% of rows
 > "carry no value in `respect_points`". That was wrong, and wrong in the direction that
 > matters. Re-measured distinguishing null from zero:
+
+<!-- measured 2026-09-08T19:20Z - zao-measure --verify "zaofractal: fractal ledger shape" -->
 
 | Field | null | zero | genuinely present |
 |---|---|---|---|

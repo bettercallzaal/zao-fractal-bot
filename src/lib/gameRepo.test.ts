@@ -2,71 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { completeSession, createSession, loadSessionByThread, recordVote } from './gameRepo.js';
 import { startSession, votesNeeded } from '../game/session.js';
-
-interface Call {
-  table: string;
-  op: string;
-  payload?: unknown;
-}
-
-type Result = { data?: unknown; error?: { message: string } | null };
-
-/** A chainable Supabase fake. Records every (table, op) and resolves each to a
- * configured result, so a test can make one specific write fail.
- *
- * It cannot tell you a table is missing - no mock can, which is the lesson
- * from PR #15 - so the table names here are the ones checked against the live
- * database by hand in migration 0005. */
-function fakeSupabase(opts: {
-  results?: Record<string, Result>;
-  failOn?: { table: string; op: string };
-} = {}) {
-  const calls: Call[] = [];
-
-  function builder(table: string, op: string): Record<string, unknown> {
-    const key = `${table}.${op}`;
-    const failed = opts.failOn && opts.failOn.table === table && opts.failOn.op === op;
-    const result: Result = failed
-      ? { data: null, error: { message: `simulated ${op} failure on ${table}` } }
-      : (opts.results?.[key] ?? { data: [], error: null });
-
-    const self: Record<string, unknown> = {
-      select: () => self,
-      eq: () => self,
-      in: () => self,
-      order: () => self,
-      single: async () => result,
-      maybeSingle: async () => result,
-      then: (resolve: (v: Result) => unknown, reject?: (e: unknown) => unknown) =>
-        Promise.resolve(result).then(resolve, reject),
-    };
-    return self;
-  }
-
-  return {
-    calls,
-    from(table: string) {
-      return {
-        insert: (payload: unknown) => {
-          calls.push({ table, op: 'insert', payload });
-          return builder(table, 'insert');
-        },
-        upsert: (payload: unknown) => {
-          calls.push({ table, op: 'upsert', payload });
-          return builder(table, 'upsert');
-        },
-        update: (payload: unknown) => {
-          calls.push({ table, op: 'update', payload });
-          return builder(table, 'update');
-        },
-        select: (cols?: string) => {
-          calls.push({ table, op: 'select', payload: cols });
-          return builder(table, 'select');
-        },
-      };
-    },
-  };
-}
+import { fakeSupabase } from './testing/fakeSupabase.js';
 
 const state = startSession({
   threadId: 'thread-1',
@@ -80,6 +16,16 @@ const state = startSession({
 
 const sessionInsertOk = { 'fractal_sessions.insert': { data: { id: 'sess-1' }, error: null } };
 
+// createSession writes fractal_sessions.meeting_number, a column
+// 0005_respect_game.sql adds via `alter table ... add column if not
+// exists`. The live ZAO OS database doesn't have it yet (those migrations
+// have never been applied there - a tracked deployment gap, see
+// pendingMigrationColumns() in schemaFromMigrations.ts), but the column is
+// real and pending, not a typo - so buildSchema() unions it into
+// fractal_sessions's known columns from the ZAO OS snapshot, and these
+// tests pass. A genuine unknown column on this table (a typo like
+// `meetingnumber`) is still rejected; see
+// src/lib/testing/schemaFromMigrations.test.ts for both cases.
 describe('createSession', () => {
   it('writes an active session row carrying the meeting number', async () => {
     const sb = fakeSupabase({ results: sessionInsertOk });
