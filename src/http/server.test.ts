@@ -62,6 +62,39 @@ describe('createHttpServer', () => {
     });
   });
 
+  // The command surface can start a fractal, delete a roster and upsert a
+  // member's payout wallet. On a shared panel host, with no consumer deployed
+  // (the dashboard is not live), the safe default is that it is not mounted at
+  // all - a route that does not exist cannot be brute-forced.
+  describe('command API mounting', () => {
+    it('is not mounted when disabled, and says nothing about what would be there', async () => {
+      const app = createHttpServer(fakeSupabase, 'correct-secret', { enableCommandApi: false });
+      const res = await request(app)
+        .post('/commands/randomize')
+        .set('x-bot-api-secret', 'correct-secret')
+        .send({ params: {}, idempotencyKey: 'k1', requestedBy: 'admin1' });
+      expect(res.status).toBe(404);
+      expect(vi.mocked(executeCommandModule.executeCommand)).not.toHaveBeenCalled();
+    });
+
+    it('still serves health when the command API is disabled', async () => {
+      const app = createHttpServer(fakeSupabase, 'correct-secret', {
+        enableCommandApi: false,
+        isDiscordReady: () => true,
+      });
+      expect((await request(app).get('/healthz')).status).toBe(200);
+    });
+
+    it('is mounted when enabled', async () => {
+      const app = createHttpServer(fakeSupabase, 'correct-secret', { enableCommandApi: true });
+      const res = await request(app)
+        .post('/commands/randomize')
+        .set('x-bot-api-secret', 'correct-secret')
+        .send({ params: {}, idempotencyKey: 'k1', requestedBy: 'admin1' });
+      expect(res.status).toBe(200);
+    });
+  });
+
   it('rejects requests with missing x-bot-api-secret header and does not call executeCommand', async () => {
     const app = createHttpServer(fakeSupabase, 'correct-secret');
     const res = await request(app)

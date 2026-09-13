@@ -9,9 +9,10 @@ import { executeCommand } from '../commands/executeCommand.js';
 export function createHttpServer(
   supabase: SupabaseClient,
   apiSecret: string,
-  opts: { isDiscordReady?: () => boolean } = {},
+  opts: { isDiscordReady?: () => boolean; enableCommandApi?: boolean } = {},
 ) {
   const app = express();
+  app.disable('x-powered-by');
   app.use(express.json());
 
   /** Liveness + readiness, for the host panel and for a human asking "is it
@@ -29,6 +30,12 @@ export function createHttpServer(
       uptimeSeconds: Math.round(process.uptime()),
     });
   });
+
+  // Default ON so existing callers keep working; index.ts opts in explicitly
+  // from ENABLE_COMMAND_API, which defaults to off for a hosted deployment.
+  if (opts.enableCommandApi === false) {
+    return app;
+  }
 
   app.post('/commands/:action', async (req, res) => {
     const authHeader = req.header('x-bot-api-secret');

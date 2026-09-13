@@ -102,6 +102,18 @@ describe('startCommand', () => {
     const meetingOption = json.options?.find((o) => o.name === 'meeting');
     expect(meetingOption?.required).toBe(true);
   });
+
+  it('is not runnable by every member', () => {
+    // /start writes fractal_sessions and fractal_scores rows, which are the
+    // same rows a human reads when building an onchain award proposal.
+    // MIN_GROUP_MEMBERS is 2 and a two-person majority is unanimity, so with no
+    // gate any two accounts could rank each other into a plausible 110/68
+    // result against a real meeting number. This test exists so nobody removes
+    // the gate without reading that sentence.
+    const json = startCommand.toJSON();
+    expect(json.default_member_permissions).toBeTruthy();
+    expect(json.default_member_permissions).not.toBe('0');
+  });
 });
 
 // These drive handleStart and handleVote (both unexported) through the real
