@@ -28,6 +28,32 @@ describe('fractal knowledge base', () => {
   });
 });
 
+describe('vote weight, as OREC actually computes it', () => {
+  // MEASURED 2026-09-11 against @ordao/orec v1.4.4 Orec.sol and the deployed OREC at
+  // 0xcB05F9254765CA521F7698e61E0A6CA6456Be532 on Optimism. `_vote()` calls
+  // voteWeightOf(msg.sender) at the moment each voter casts, and the contract header says
+  // it "does not know when respect of someone gets updated". There is no snapshot anywhere
+  // in the code. The entry used to say weight was snapshotted at the block a proposal is
+  // created, which is the kind of wrong answer a member would plan around: it implies
+  // earning Respect mid-vote cannot help you, when in fact it can.
+  const ledgers = FRACTAL_KNOWLEDGE.find((e) => e.key === 'ledgers');
+
+  it('does not tell members their weight is snapshotted at proposal creation', () => {
+    expect(ledgers).toBeDefined();
+    expect(ledgers!.body.toLowerCase()).not.toMatch(/snapshot/);
+  });
+
+  it('says weight is read when the vote is cast', () => {
+    expect(ledgers!.body.toLowerCase()).toMatch(/when you (vote|cast)|at the moment you vote/);
+  });
+
+  it('no entry anywhere claims a proposal-creation snapshot', () => {
+    for (const e of FRACTAL_KNOWLEDGE) {
+      expect(e.body.toLowerCase()).not.toMatch(/snapshot/);
+    }
+  });
+});
+
 describe('findEntry', () => {
   it('matches an exact key', () => {
     expect(findEntry('governance')?.key).toBe('governance');
