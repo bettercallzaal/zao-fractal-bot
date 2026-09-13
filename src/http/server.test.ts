@@ -18,6 +18,50 @@ describe('createHttpServer', () => {
     }));
   });
 
+  // Deployment needs a way to ask "is this process actually working", and on a
+  // panel host the answer has to be available even when the Discord gateway is
+  // down - that is precisely the case you need to see. So /healthz is
+  // unauthenticated (it exposes no state beyond up/ready), and it reports the
+  // gateway separately from the process.
+  describe('GET /healthz', () => {
+    it('answers without the api secret', async () => {
+      const app = createHttpServer(fakeSupabase, 'correct-secret', { isDiscordReady: () => true });
+      const res = await request(app).get('/healthz');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('ok');
+    });
+
+    it('reports the gateway as down without claiming the process is unhealthy', async () => {
+      const app = createHttpServer(fakeSupabase, 'correct-secret', { isDiscordReady: () => false });
+      const res = await request(app).get('/healthz');
+      expect(res.status).toBe(503);
+      expect(res.body.discord).toBe('disconnected');
+    });
+
+    it('reports the gateway as connected once it is ready', async () => {
+      let ready = false;
+      const app = createHttpServer(fakeSupabase, 'correct-secret', { isDiscordReady: () => ready });
+      expect((await request(app).get('/healthz')).body.discord).toBe('disconnected');
+      ready = true;
+      const res = await request(app).get('/healthz');
+      expect(res.body.discord).toBe('connected');
+      expect(res.status).toBe(200);
+    });
+
+    it('leaks no secret', async () => {
+      const app = createHttpServer(fakeSupabase, 'correct-secret', { isDiscordReady: () => true });
+      const res = await request(app).get('/healthz');
+      expect(JSON.stringify(res.body)).not.toContain('correct-secret');
+    });
+
+    it('still serves health when no readiness probe is supplied', async () => {
+      const app = createHttpServer(fakeSupabase, 'correct-secret');
+      const res = await request(app).get('/healthz');
+      expect(res.status).toBe(200);
+      expect(res.body.discord).toBe('unknown');
+    });
+  });
+
   it('rejects requests with missing x-bot-api-secret header and does not call executeCommand', async () => {
     const app = createHttpServer(fakeSupabase, 'correct-secret');
     const res = await request(app)

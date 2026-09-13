@@ -29,10 +29,25 @@ const client = new Client({
   ],
 });
 
+// The HTTP server starts before login, not inside ClientReady. A host asking
+// "is this process healthy" most needs an answer when the gateway is NOT up -
+// a bad token or a Discord outage used to mean no server at all, which looks
+// identical to a dead box.
+let discordReady = false;
+const supabaseForHttp = getSupabaseClient();
+const port = Number(process.env.HTTP_PORT ?? 8080);
+createHttpServer(supabaseForHttp, apiSecret, { isDiscordReady: () => discordReady }).listen(
+  port,
+  () => {
+    console.log(`HTTP server listening on port ${port} (health at /healthz)`);
+  },
+);
+
 client.once(Events.ClientReady, (readyClient) => {
   console.log(`Logged in as ${readyClient.user.tag}`);
+  discordReady = true;
 
-  const supabase = getSupabaseClient();
+  const supabase = supabaseForHttp;
   subscribeToCommands(supabase, readyClient);
   console.log('Subscribed to bot_commands');
 
@@ -54,10 +69,13 @@ client.once(Events.ClientReady, (readyClient) => {
     `Awareness active: voice tracker (${trackedVoice.length ? trackedVoice.length + ' tracked channel(s)' : 'all channels'}) + heartbeat`,
   );
 
-  const port = Number(process.env.HTTP_PORT ?? 8080);
-  createHttpServer(supabase, apiSecret).listen(port, () => {
-    console.log(`HTTP fallback server listening on port ${port}`);
-  });
+});
+
+client.on(Events.ShardDisconnect, () => {
+  discordReady = false;
+});
+client.on(Events.ShardResume, () => {
+  discordReady = true;
 });
 
 await client.login(token);
