@@ -7,7 +7,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Client } from 'discord.js';
 
-const BOT_NAME = 'fractalbot';
+/** One row per INSTANCE, not per codebase. Every deployment of this code used
+ * to upsert the same 'fractalbot' row, so two instances running at once looked
+ * exactly like one instance running - and "is last_seen advancing" is the check
+ * the deploy runbook nominates as proof the deployment is healthy. Two bots
+ * recording one fractal is the highest-cost mistake available here, so the
+ * heartbeat must be able to show it. */
+const BOT_NAME = process.env.BOT_INSTANCE_NAME ?? 'fractalbot';
 
 /** Begin writing heartbeats every `intervalMs` (default 60s). Returns the
  * timer so callers can clear it in tests/shutdown. The timer is unref'd so it

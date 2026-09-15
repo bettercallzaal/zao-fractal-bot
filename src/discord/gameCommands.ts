@@ -10,6 +10,7 @@ import {
   type Client,
   Events,
   MessageFlags,
+  PermissionFlagsBits,
   SlashCommandBuilder,
 } from 'discord.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -28,6 +29,13 @@ const live = new Map<string, { sessionId: string; state: GameState }>();
 export const startCommand = new SlashCommandBuilder()
   .setName('start')
   .setDescription('Start a fractal in this thread')
+  // /start writes real rows into fractal_sessions and fractal_scores, the same
+  // tables a human reads when building an onchain award proposal. MIN_GROUP_MEMBERS
+  // is 2 and a two-person majority is unanimity, so without this gate any two
+  // accounts could rank each other and mint a plausible-looking 110/68 result
+  // against a real meeting number. ManageThreads is the closest existing
+  // permission to "runs fractals"; a dedicated facilitator role can replace it.
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageThreads)
   .addIntegerOption((o) =>
     o.setName('meeting').setDescription('Fractal number, e.g. 111').setRequired(true),
   )
