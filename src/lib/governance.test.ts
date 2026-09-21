@@ -23,7 +23,7 @@ describe('voteStatusLabel', () => {
 });
 
 describe('labelRespectContract', () => {
-  it('identifies OG as the frozen ledger', () => {
+  it('identifies OG as the initial ledger', () => {
     expect(labelRespectContract('0x34cE89baA7E4a4B00E17F7E4C0cb97105C216957')).toContain('OG');
   });
   it('identifies ZOR as the active ledger', () => {

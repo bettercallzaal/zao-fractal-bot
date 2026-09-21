@@ -39,7 +39,7 @@ export const FRACTAL_KNOWLEDGE: KnowledgeEntry[] = [
     aliases: ['respect token', 'reputation', 'zor', 'og'],
     body: [
       'Respect is soulbound, earned reputation - it cannot be bought, sold, or transferred. It is minted only by a passed governance proposal, so every token traces to peer recognition.',
-      'Two ledgers: OG Respect (the frozen historical ledger, and the source of on-chain vote weight) and ZOR Respect (the active ledger every weekly award now mints). See "ledgers" for how they differ.',
+      'Two ledgers: OG Respect (the initial historical ledger, and the source of on-chain vote weight) and ZOR Respect (the active ledger every weekly award now mints). See "ledgers" for how they differ.',
     ].join('\n\n'),
     see: ['ledgers', 'tokens', 'scoring'],
   },
@@ -79,7 +79,7 @@ export const FRACTAL_KNOWLEDGE: KnowledgeEntry[] = [
     title: 'The two ledgers (and the vote-weight gap)',
     aliases: ['two ledgers', 'og vs zor', 'vote weight', 'og zor'],
     body: [
-      'Vote weight is read from OG Respect only, and it is read when you vote - OREC checks your balance at the moment you cast, not once for everyone when the proposal is created. OG has been frozen since late 2025.',
+      'Vote weight is read from OG Respect only, and it is read when you vote - OREC checks your balance at the moment you cast, not once for everyone when the proposal is created. New mints to OG have been paused since late 2025 by policy (OG remains mintable whenever chosen).',
       'ZOR - the token every weekly award now mints - is a verifiable record of contribution but does not yet carry a vote. So a member who joined after the freeze and holds only ZOR currently has no on-chain vote weight.',
       'Closing that gap - giving the active ledger a path to voting weight without discarding OG history - is the honest open problem, named in the whitepaper.',
     ].join('\n\n'),
