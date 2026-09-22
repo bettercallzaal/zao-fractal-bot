@@ -44,7 +44,7 @@ export function voteStatusLabel(status: number): string {
  * the OG-vs-ZOR question from ground truth rather than docs. */
 export function labelRespectContract(address: string): string {
   const a = address.toLowerCase();
-  if (a === OG_RESPECT_ADDRESS.toLowerCase()) return 'OG (frozen historical ledger)';
+  if (a === OG_RESPECT_ADDRESS.toLowerCase()) return 'OG (initial historical ledger)';
   if (a === ZOR_RESPECT_ADDRESS.toLowerCase()) return 'ZOR (active reward ledger)';
   return 'unknown';
 }
