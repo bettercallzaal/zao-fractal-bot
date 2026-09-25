@@ -7,6 +7,11 @@ built on the stack decisions in ZAOOS research
 which in turn is grounded in [doc 981](https://github.com/bettercallzaal/ZAOOS/tree/main/research/governance/981-fractal-bot-synthesis)
 (the full synthesis of the old bot + the whitepaper + verified on-chain state).
 
+**New to this project, or an agent picking it up cold?** Read `docs/history/README.md` first -
+it points to a sourced timeline of ZAO Fractal's own history, the broader fractal-governance
+movement it inherits from, and a structured JSON version of the same, plus a note on which other
+fractal-related docs across the estate to trust and which to treat as stale.
+
 ## Stack
 
 - **discord.js** (TypeScript) - not discord.py. Shares a language with the ZAOOS
