@@ -190,3 +190,12 @@ Recorded rather than resolved - each needs either a source not yet found, or Zaa
    production" actually describing?** Possibly a parallel deploy neither this document nor the
    Discord check found, possibly aspirational README copy written ahead of the actual cutover.
    Not guessed here - needs whoever controls the bot-hosting.net panel.
+6. **Two live ZAO documents propose incompatible answers to the same governance question -
+   found 2026-09-26 by the zao-papers lane, not this one.** The whitepaper drafts (ch04 section
+   VI, ch05) propose a future 2% weekly decay on Respect *balances* themselves, explicitly to
+   keep governance weighted toward recent contribution. ZIP-2 and brainstorm #1 say the opposite
+   for Season 3: the active pool changes monthly (now ruled a rolling 90 days, see the 2026-09-26
+   entry above), balances never do, nothing burns. This document does not resolve it and should
+   not - it is recorded as NEEDS ZAAL in ZAOOS doc 2558 (contradiction item 5, commit
+   `bca759360`, PR #3658) and in `~/zao-vault/handoffs/status/zao-papers.md`. Do not let a future
+   edit here quietly harmonize the two; the disagreement is itself the finding.
