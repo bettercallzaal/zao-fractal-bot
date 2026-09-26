@@ -107,10 +107,17 @@ fractalbotnov2025 -> fractalbotdec2025 -> fractalbotv1old -> fractalbotfeb2026
   policy." Same day, this repo's README gained a "Subsystems and Architecture Status" block
   declaring Subsystem 1 (Respect Game core) **"Active in production."** ZAOfractal's own
   whitepaper ch08 was updated the same day with matching language, stating the Python bot
-  (`fractalbotapril2026`) "was retired" in September 2026. **Neither claim is independently
-  verified in this document** - no live heartbeat check or confirmed-applied-migration check was
-  run to produce this timeline; both are the two repos' own self-description, dated the same day,
-  which is consistent but not itself a second source.
+  (`fractalbotapril2026`) "was retired" in September 2026.
+- **2026-09-25 - RESOLVED, and the 09-21 claim above does not hold.** Zaal ran `/admin_lookup`
+  in the live `#fractal-bot` Discord channel at 5:16pm; the bot responded. `/admin_lookup` is
+  defined nowhere in this repo (`grep -rl admin_lookup src/` finds nothing) - it exists only in
+  `fractalbotapril2026`'s `cogs/wallet.py` (`@app_commands.command(name="admin_lookup", ...)`,
+  Supreme-Admin-gated wallet lookup). **The bot actually answering commands in the ZAO Discord
+  server today is running the archived Python codebase, not this repo.** Both this repo's README
+  and ZAOfractal's ch08 self-declared "live in production" / "retired" on the same day
+  (2026-09-21) with no independent check behind either - this is that check, and it comes out the
+  other way. README.md has not yet been corrected; that is a separate, deliberate call, not made
+  silently in this file.
 
 ## The recording gap and the migrations, still open as of this writing
 
@@ -165,12 +172,21 @@ fractalbotnov2025 -> fractalbotdec2025 -> fractalbotv1old -> fractalbotfeb2026
 
 Recorded rather than resolved - each needs either a source not yet found, or Zaal's word.
 
-1. **"Subsystem 1 is live in production"** - asserted by this repo's README and by ZAOfractal's
-   whitepaper, both updated 2026-09-21, neither independently verified here.
+1. ~~**"Subsystem 1 is live in production"**~~ - **RESOLVED 2026-09-25, false.** See above: the
+   bot answering commands in the real Discord server today runs `fractalbotapril2026`'s Python
+   codebase, not this repo. Kept here struck-through rather than deleted, per this vault's
+   never-delete convention.
 2. **The unbroken weekly streak** - whitepaper ch08 marks this explicitly `[unverified]`: no
    source confirms it, and periods 71, 72 and 103 have gaps in at least one record.
-3. **Migrations 0001-0007 applied or not** - UNKNOWN as of this writing; see above.
+3. **Migrations 0001-0007 applied or not** - **partially resolved 2026-09-25**: 0001-0006 are
+   confirmed applied (`zao-measure --verify`, 2026-09-19, every v2 table 404 -> 200). Migration
+   0006's `manual` CHECK constraint specifically, and migration 0007, remain UNKNOWN - neither is
+   visible through a REST read.
 4. **"40 active per session"** (this repo's own `docs/deploy/bot-hosting-runbook.md` and older
    research) vs. the measured median 7 / mean 8 / max 17 people who actually receive Respect per
    session across 42 recorded periods. Both figures exist in the estate; only the second is
    sourced to a direct count.
+5. **If the Python bot is still the one running, what is "Subsystem 1 (TypeScript) - Active in
+   production" actually describing?** Possibly a parallel deploy neither this document nor the
+   Discord check found, possibly aspirational README copy written ahead of the actual cutover.
+   Not guessed here - needs whoever controls the bot-hosting.net panel.
