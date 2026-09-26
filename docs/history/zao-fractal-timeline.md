@@ -167,6 +167,15 @@ fractalbotnov2025 -> fractalbotdec2025 -> fractalbotv1old -> fractalbotfeb2026
   Year's, with the extra time spent on upgrading and testing, and says Season 3 needs an actual
   governance proposal and a promotion push before it ships - not just a merged document. Not
   decided. *(`~/zao-vault/notes/season3-launch-date-tentative-2026-09-24.md`)*
+- **2026-09-26** - Zaal rules on the balance-decay-vs-no-burn conflict (see Open contradictions
+  #6 below): no-burn wins, the 2% weekly Respect decay is cut from the whitepaper. Same grill:
+  OG Respect resumes as a one-time achievements ledger minted through OREC rather than staying
+  frozen; Respect splits by project (ZAO Festivals, ZAO Fractal/governance, WaveWarZ later); and
+  Season 3 is reframed as the production release out of beta, not a membership patch - superseding
+  brainstorm #31's framing and reopening whether ZIP-2 stays an amendment or becomes a new
+  ZIP-1-scale document. Launch also moves from 1 November to 1 December 2026.
+  *(`~/zao-vault/decisions/grill-2026-09-26-zao-papers-afternoon.md`, relayed cross-session by the
+  zao-papers lane)*
 
 ## Open contradictions
 
@@ -190,12 +199,15 @@ Recorded rather than resolved - each needs either a source not yet found, or Zaa
    production" actually describing?** Possibly a parallel deploy neither this document nor the
    Discord check found, possibly aspirational README copy written ahead of the actual cutover.
    Not guessed here - needs whoever controls the bot-hosting.net panel.
-6. **Two live ZAO documents propose incompatible answers to the same governance question -
-   found 2026-09-26 by the zao-papers lane, not this one.** The whitepaper drafts (ch04 section
-   VI, ch05) propose a future 2% weekly decay on Respect *balances* themselves, explicitly to
-   keep governance weighted toward recent contribution. ZIP-2 and brainstorm #1 say the opposite
-   for Season 3: the active pool changes monthly (now ruled a rolling 90 days, see the 2026-09-26
-   entry above), balances never do, nothing burns. This document does not resolve it and should
-   not - it is recorded as NEEDS ZAAL in ZAOOS doc 2558 (contradiction item 5, commit
-   `bca759360`, PR #3658) and in `~/zao-vault/handoffs/status/zao-papers.md`. Do not let a future
-   edit here quietly harmonize the two; the disagreement is itself the finding.
+6. ~~**Two live ZAO documents propose incompatible answers to the same governance question**~~ -
+   **RESOLVED 2026-09-26, no-burn wins.** Found 2026-09-26 by the zao-papers lane: the whitepaper
+   drafts (ch04 section VI, ch05) proposed a future 2% weekly decay on Respect *balances*
+   themselves; ZIP-2 and brainstorm #1 said the opposite for Season 3 - balances never decay,
+   nothing burns. Zaal ruled in the zao-papers afternoon grill (ruling 6): activation already does
+   what decay was for, and every system surveyed in ZAOOS doc 2558 (Colony, Gardens, Coordinape,
+   fractally's own moving average) decays weight or a scoring input, never the earned record -
+   keeping both would punish absence twice. The 2% weekly decay comes out of ch04 section VI and
+   the matching ch05 paragraph; ZIP-2's no-burn design stands. Kept here struck-through rather
+   than deleted, per this vault's never-delete convention.
+   *(`~/zao-vault/decisions/grill-2026-09-26-zao-papers-afternoon.md`, ruling 6, commit
+   `0f9cfad2`)*
