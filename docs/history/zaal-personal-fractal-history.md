@@ -21,9 +21,12 @@ from `zao-fractal-timeline.md` - that one is the organization's history; this on
 
 **Read this section carefully before quoting a number from it.** Of 518 total OG Respect
 transfers ever recorded on the token, **447 have Zaal's wallet as the sender**. Of the 74 where
-his wallet is the *recipient*, all but four are direct mints from the zero address
+his wallet is the *recipient*, 69 are direct mints from the zero address
 (`0x000...000`), arriving in small, irregular batches (5, 8, 10, 13, 21, 34, 44... up to
-2,852 in one mint) roughly weekly to biweekly from 2024-07-30 through 2025-09-09.
+2,852 in one mint) roughly weekly to biweekly from 2024-07-30 through 2025-09-09. The other five
+are the two settlement transfers described below, a 126 OG transfer from the wallet to itself
+on 2025-04-15, and two more non-mint receipts; recounted from the Blockscout transfer log on
+2026-09-27.
 
 This is not a personal Respect-earned record. It is the shape of how OG Respect actually worked
 for periods 1-66: Zaal held mint authority and distributed awards to members by hand, week to
