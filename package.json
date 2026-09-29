@@ -20,6 +20,7 @@
     "test:all": "npm test",
     "smoke": "tsx scripts/smoke.ts",
     "verify-awards": "tsx scripts/verify-awards.ts",
+    "newcomers": "tsx scripts/newcomers.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
