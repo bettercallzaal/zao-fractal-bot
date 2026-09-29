@@ -31,7 +31,10 @@ import {
 
 const ORNODE_URL = process.env.ZAO_ORNODE_URL ?? 'https://zao-ornode.frapps.xyz';
 const ROSTER_PATH = new URL('../docs/members/roster.json', import.meta.url);
-const PAGE = 50;
+// ornode caps limit at 50 with no error (probed 2026-09-29). Page below the
+// cap so a second that fills a page can be re-read wider - see paginateProposals.
+const PAGE = 25;
+const WIDE = 50;
 
 const BALANCE_ABI = [
   { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }, { type: 'uint256' }], outputs: [{ type: 'uint256' }] },
@@ -60,7 +63,7 @@ async function fetchAllProposals(): Promise<OrnodeProposal[]> {
     });
     if (!res.ok) throw new Error(`ornode getProposals failed: HTTP ${res.status}`);
     return ((await res.json()) as { proposals: OrnodeProposal[] }).proposals;
-  }, PAGE);
+  }, PAGE, WIDE);
 }
 
 function loadRoster(): RosterFile {

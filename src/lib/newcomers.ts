@@ -174,27 +174,41 @@ function isoDate(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 }
 
-/** One ornode getProposals call. ornode returns the newest `limit` proposals
- * with createTs strictly below `before` (probed live 2026-09-29). */
+/** One ornode getProposals call. Live semantics, probed 2026-09-29: newest
+ * first, createTs strictly below `before`, and `limit` silently capped at 50
+ * (asking for 100 returns 50 with no error; omitting it returns 10). */
 export type FetchProposalPage = (spec: { limit: number; before?: number }) => Promise<OrnodeProposal[]>;
 
 /** Walk every ornode proposal, newest first.
  *
- * ornode only takes a timestamp cursor, and timestamps are not unique, so a
- * composite (createTs, id) cursor is not available server-side. Instead the
- * cursor is made INCLUSIVE of the oldest second seen (before = oldest + 1):
- * each page re-reads the boundary second, and ids already seen are skipped.
- * A strict before = oldest silently dropped every boundary-second item that
- * did not fit on the page.
+ * ornode only takes a timestamp cursor and timestamps are not unique, so a
+ * composite (createTs, id) cursor is not available. Instead:
  *
- * If a full page brings nothing new, one second fills a whole page and there
- * may be more, and no timestamp cursor can get past it - that throws instead of
- * returning a quietly short list. */
-export async function paginateProposals(fetchPage: FetchProposalPage, pageSize: number): Promise<OrnodeProposal[]> {
+ * - The cursor is INCLUSIVE of the oldest second seen (before = oldest + 1):
+ *   each page re-reads the boundary second and skips ids already seen. The
+ *   old strict cursor (before = oldest) dropped every boundary-second item
+ *   that did not fit on the page.
+ * - A full page that adds nothing means one second fills the page. From
+ *   same-size pages "exactly full" and "overflowed" look identical, so the
+ *   second is re-read once at `wideLimit`. If that page is short, or reaches
+ *   older items, the second is fully enumerated. If it too is full and adds
+ *   nothing, completeness cannot be proven and this throws.
+ * - A short page is only the end of the data if the server honoured the
+ *   limit. Because ornode caps silently, a short page is checked with one
+ *   strict probe for anything older; finding some means the cap is below the
+ *   page size, and that throws instead of returning one page as "everything".
+ *
+ * pageSize must sit below wideLimit, and wideLimit at or below the server cap. */
+export async function paginateProposals(
+  fetchPage: FetchProposalPage,
+  pageSize: number,
+  wideLimit: number,
+): Promise<OrnodeProposal[]> {
+  if (pageSize >= wideLimit) {
+    throw new Error(`pageSize ${pageSize} needs headroom below wideLimit ${wideLimit} to resolve a full second`);
+  }
   const seen = new Map<string, OrnodeProposal>();
-  let before: number | undefined;
-  for (;;) {
-    const page = await fetchPage({ limit: pageSize, ...(before !== undefined ? { before } : {}) });
+  const absorb = (page: OrnodeProposal[]): number => {
     let added = 0;
     for (const p of page) {
       if (!seen.has(p.id)) {
@@ -202,14 +216,40 @@ export async function paginateProposals(fetchPage: FetchProposalPage, pageSize: 
         added += 1;
       }
     }
-    if (page.length < pageSize) break;
-    const oldest = Math.min(...page.map((p) => p.createTs));
-    if (added === 0) {
-      throw new Error(
-        `at least ${pageSize} proposals share createTs ${oldest}; a timestamp cursor cannot page past them - raise the page size`,
-      );
+    return added;
+  };
+  const oldestOf = (page: OrnodeProposal[]) => Math.min(...page.map((p) => p.createTs));
+
+  let before: number | undefined;
+  for (;;) {
+    const cursor = before !== undefined ? { before } : {};
+    let limit = pageSize;
+    let page = await fetchPage({ limit, ...cursor });
+    // absorb() must run on every page - never behind a short-circuit.
+    let added = absorb(page);
+    if (page.length === limit && added === 0) {
+      limit = wideLimit;
+      page = await fetchPage({ limit, ...cursor });
+      added = absorb(page);
+      if (page.length === limit && added === 0) {
+        throw new Error(
+          `cannot prove the list is complete: at least ${limit} proposals share createTs ${oldestOf(page)}, ` +
+            'and a timestamp cursor cannot page within one second',
+        );
+      }
     }
-    before = oldest + 1;
+    if (page.length < limit) {
+      if (page.length > 0) {
+        const older = await fetchPage({ limit: 1, before: oldestOf(page) });
+        if (older.length > 0) {
+          throw new Error(
+            `ornode returned ${page.length} of ${limit} requested yet older proposals exist - its page cap is below ${limit}`,
+          );
+        }
+      }
+      break;
+    }
+    before = oldestOf(page) + 1;
   }
   return [...seen.values()];
 }

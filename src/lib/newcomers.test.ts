@@ -110,29 +110,79 @@ describe('diffNewcomers', () => {
 });
 
 describe('paginateProposals', () => {
-  /** Fake ornode with the live semantics: newest first, createTs < before. */
-  function fakeOrnode(items: OrnodeProposal[]): FetchProposalPage {
+  /** Fake ornode with the live semantics, all probed 2026-09-29: newest first,
+   * createTs strictly below `before`, and `limit` silently capped (50 live). */
+  function fakeOrnode(items: OrnodeProposal[], cap = Infinity): FetchProposalPage {
     const sorted = [...items].sort((a, b) => b.createTs - a.createTs || b.id.localeCompare(a.id));
     return async ({ limit, before }) =>
-      sorted.filter((p) => before === undefined || p.createTs < before).slice(0, limit);
+      sorted.filter((p) => before === undefined || p.createTs < before).slice(0, Math.min(limit, cap));
   }
   const prop = (id: string, createTs: number): OrnodeProposal => ({ id, createTs, status: 'Executed' });
+  const ids = (ps: OrnodeProposal[]) => ps.map((p) => p.id).sort();
 
-  it('returns every item exactly once when several share the page-boundary createTs', async () => {
-    // Page size 4: first page is c,b,a3,a2 - a1 shares their createTs and
-    // falls off the end of the page. A strict createTs cursor skips it.
-    const items = [prop('c', 300), prop('b', 200), prop('a1', 100), prop('a2', 100), prop('a3', 100), prop('z', 50)];
-    const got = await paginateProposals(fakeOrnode(items), 4);
-    expect(got.map((p) => p.id).sort()).toEqual(['a1', 'a2', 'a3', 'b', 'c', 'z']);
+  /** RED CONTROL: the paginator as it shipped before the boundary fix, kept
+   * verbatim so the fix stays provably red-then-green on disk. Do not "fix"
+   * this copy - its job is to fail. */
+  async function legacyPaginate(fetchPage: FetchProposalPage, pageSize: number): Promise<OrnodeProposal[]> {
+    const all: OrnodeProposal[] = [];
+    let before: number | undefined;
+    for (;;) {
+      const proposals = await fetchPage({ limit: pageSize, ...(before !== undefined ? { before } : {}) });
+      if (proposals.length === 0) break;
+      all.push(...proposals);
+      const oldest = Math.min(...proposals.map((p) => p.createTs));
+      if (proposals.length < pageSize || oldest === before) break;
+      before = oldest;
+    }
+    return [...new Map(all.map((p) => [p.id, p])).values()];
+  }
+
+  // Page size 4: the first page is c,b,a3,a2 - a1 shares their createTs and
+  // falls off the end of the page.
+  const BOUNDARY = [prop('c', 300), prop('b', 200), prop('a1', 100), prop('a2', 100), prop('a3', 100), prop('z', 50)];
+
+  it('control: the pre-fix paginator drops the boundary-second item', async () => {
+    expect(ids(await legacyPaginate(fakeOrnode(BOUNDARY), 4))).toEqual(['a2', 'a3', 'b', 'c', 'z']);
   });
 
-  it('refuses rather than drops when one second fills a whole page', async () => {
-    const items = [prop('c', 300), prop('a1', 100), prop('a2', 100), prop('a3', 100), prop('z', 50)];
-    await expect(paginateProposals(fakeOrnode(items), 3)).rejects.toThrow(/at least 3 proposals share createTs 100/);
+  it('returns every item exactly once when several share the page-boundary createTs', async () => {
+    expect(ids(await paginateProposals(fakeOrnode(BOUNDARY), 4, 8))).toEqual(['a1', 'a2', 'a3', 'b', 'c', 'z']);
+  });
+
+  it('returns everything when the last second holds exactly one page (no false throw)', async () => {
+    const items = [prop('c', 300), prop('a1', 100), prop('a2', 100), prop('a3', 100)];
+    expect(ids(await paginateProposals(fakeOrnode(items), 3, 6))).toEqual(['a1', 'a2', 'a3', 'c']);
+  });
+
+  it('returns everything when the last second overflows a page but not the wide re-read', async () => {
+    // A strict "anything older?" probe would see nothing and stop with 3 of
+    // the 4 - the wide re-read is what finds a4.
+    const items = [prop('a1', 100), prop('a2', 100), prop('a3', 100), prop('a4', 100)];
+    expect(ids(await paginateProposals(fakeOrnode(items), 3, 6))).toEqual(['a1', 'a2', 'a3', 'a4']);
+  });
+
+  it('refuses rather than drops when one second fills even the wide re-read', async () => {
+    const items = [prop('c', 300), ...[1, 2, 3, 4, 5, 6].map((n) => prop(`a${n}`, 100)), prop('z', 50)];
+    await expect(paginateProposals(fakeOrnode(items), 3, 6)).rejects.toThrow(
+      /cannot prove the list is complete: at least 6 proposals share createTs 100/,
+    );
+  });
+
+  it('refuses rather than truncates when the server caps pages below the requested size', async () => {
+    const items = [prop('c', 300), prop('b', 200), prop('a', 100)];
+    await expect(paginateProposals(fakeOrnode(items, 2), 3, 6)).rejects.toThrow(/page cap is below 3/);
+  });
+
+  it('control: the pre-fix paginator silently truncates under a server cap', async () => {
+    const items = [prop('c', 300), prop('b', 200), prop('a', 100)];
+    expect(ids(await legacyPaginate(fakeOrnode(items, 2), 3))).toEqual(['b', 'c']);
+  });
+
+  it('rejects a page size with no headroom below the wide limit', async () => {
+    await expect(paginateProposals(fakeOrnode([]), 50, 50)).rejects.toThrow(/headroom/);
   });
 
   it('stops on a short page', async () => {
-    const got = await paginateProposals(fakeOrnode([prop('a', 2), prop('b', 1)]), 5);
-    expect(got.map((p) => p.id)).toEqual(['a', 'b']);
+    expect(ids(await paginateProposals(fakeOrnode([prop('a', 2), prop('b', 1)]), 5, 10))).toEqual(['a', 'b']);
   });
 });
