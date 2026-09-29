@@ -21,7 +21,13 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { OG_RESPECT_ADDRESS, ZOR_RESPECT_ADDRESS } from '@fractalbot/shared';
 import { makeOptimismClient } from '../src/lib/governance.js';
-import { buildRoster, diffNewcomers, type MemberRecord, type OrnodeProposal } from '../src/lib/newcomers.js';
+import {
+  buildRoster,
+  diffNewcomers,
+  type MemberRecord,
+  type OrnodeProposal,
+  paginateProposals,
+} from '../src/lib/newcomers.js';
 
 const ORNODE_URL = process.env.ZAO_ORNODE_URL ?? 'https://zao-ornode.frapps.xyz';
 const ROSTER_PATH = new URL('../docs/members/roster.json', import.meta.url);
@@ -46,24 +52,15 @@ interface RosterFile {
 }
 
 async function fetchAllProposals(): Promise<OrnodeProposal[]> {
-  const all: OrnodeProposal[] = [];
-  let before: number | undefined;
-  for (;;) {
+  return paginateProposals(async (spec) => {
     const res = await fetch(`${ORNODE_URL}/v1/getProposals`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ spec: { limit: PAGE, ...(before !== undefined ? { before } : {}) } }),
+      body: JSON.stringify({ spec }),
     });
     if (!res.ok) throw new Error(`ornode getProposals failed: HTTP ${res.status}`);
-    const { proposals } = (await res.json()) as { proposals: OrnodeProposal[] };
-    if (proposals.length === 0) break;
-    all.push(...proposals);
-    const oldest = Math.min(...proposals.map((p) => p.createTs));
-    if (proposals.length < PAGE || oldest === before) break;
-    before = oldest;
-  }
-  // Pages overlap at the boundary timestamp; dedupe by id.
-  return [...new Map(all.map((p) => [p.id, p])).values()];
+    return ((await res.json()) as { proposals: OrnodeProposal[] }).proposals;
+  }, PAGE);
 }
 
 function loadRoster(): RosterFile {

@@ -173,3 +173,43 @@ export function diffNewcomers(
 function isoDate(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 }
+
+/** One ornode getProposals call. ornode returns the newest `limit` proposals
+ * with createTs strictly below `before` (probed live 2026-09-29). */
+export type FetchProposalPage = (spec: { limit: number; before?: number }) => Promise<OrnodeProposal[]>;
+
+/** Walk every ornode proposal, newest first.
+ *
+ * ornode only takes a timestamp cursor, and timestamps are not unique, so a
+ * composite (createTs, id) cursor is not available server-side. Instead the
+ * cursor is made INCLUSIVE of the oldest second seen (before = oldest + 1):
+ * each page re-reads the boundary second, and ids already seen are skipped.
+ * A strict before = oldest silently dropped every boundary-second item that
+ * did not fit on the page.
+ *
+ * If a full page brings nothing new, one second fills a whole page and there
+ * may be more, and no timestamp cursor can get past it - that throws instead of
+ * returning a quietly short list. */
+export async function paginateProposals(fetchPage: FetchProposalPage, pageSize: number): Promise<OrnodeProposal[]> {
+  const seen = new Map<string, OrnodeProposal>();
+  let before: number | undefined;
+  for (;;) {
+    const page = await fetchPage({ limit: pageSize, ...(before !== undefined ? { before } : {}) });
+    let added = 0;
+    for (const p of page) {
+      if (!seen.has(p.id)) {
+        seen.set(p.id, p);
+        added += 1;
+      }
+    }
+    if (page.length < pageSize) break;
+    const oldest = Math.min(...page.map((p) => p.createTs));
+    if (added === 0) {
+      throw new Error(
+        `at least ${pageSize} proposals share createTs ${oldest}; a timestamp cursor cannot page past them - raise the page size`,
+      );
+    }
+    before = oldest + 1;
+  }
+  return [...seen.values()];
+}

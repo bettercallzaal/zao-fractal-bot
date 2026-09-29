@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildRoster, decodeAwardRecipients, diffNewcomers, type OrnodeProposal } from './newcomers.js';
+import {
+  buildRoster,
+  decodeAwardRecipients,
+  diffNewcomers,
+  type FetchProposalPage,
+  type OrnodeProposal,
+  paginateProposals,
+} from './newcomers.js';
 
 const ZOR = '0x9885CCeEf7E8371Bf8d6f2413723D25917E7445c';
 const OREC = '0xcB05F9254765CA521F7698e61E0A6CA6456Be532';
@@ -99,5 +106,33 @@ describe('diffNewcomers', () => {
     const roster = buildRoster([AJ_PKMN], ZOR);
     const fresh = diffNewcomers(roster, ['0xE34A582682691F31EA4D08C133B3692FF0EBFA24']);
     expect(fresh.map((m) => m.wallet)).toEqual(['0x4bcee979fa5e984751f9d1dab4ecf50d134f2834']);
+  });
+});
+
+describe('paginateProposals', () => {
+  /** Fake ornode with the live semantics: newest first, createTs < before. */
+  function fakeOrnode(items: OrnodeProposal[]): FetchProposalPage {
+    const sorted = [...items].sort((a, b) => b.createTs - a.createTs || b.id.localeCompare(a.id));
+    return async ({ limit, before }) =>
+      sorted.filter((p) => before === undefined || p.createTs < before).slice(0, limit);
+  }
+  const prop = (id: string, createTs: number): OrnodeProposal => ({ id, createTs, status: 'Executed' });
+
+  it('returns every item exactly once when several share the page-boundary createTs', async () => {
+    // Page size 4: first page is c,b,a3,a2 - a1 shares their createTs and
+    // falls off the end of the page. A strict createTs cursor skips it.
+    const items = [prop('c', 300), prop('b', 200), prop('a1', 100), prop('a2', 100), prop('a3', 100), prop('z', 50)];
+    const got = await paginateProposals(fakeOrnode(items), 4);
+    expect(got.map((p) => p.id).sort()).toEqual(['a1', 'a2', 'a3', 'b', 'c', 'z']);
+  });
+
+  it('refuses rather than drops when one second fills a whole page', async () => {
+    const items = [prop('c', 300), prop('a1', 100), prop('a2', 100), prop('a3', 100), prop('z', 50)];
+    await expect(paginateProposals(fakeOrnode(items), 3)).rejects.toThrow(/at least 3 proposals share createTs 100/);
+  });
+
+  it('stops on a short page', async () => {
+    const got = await paginateProposals(fakeOrnode([prop('a', 2), prop('b', 1)]), 5);
+    expect(got.map((p) => p.id)).toEqual(['a', 'b']);
   });
 });
