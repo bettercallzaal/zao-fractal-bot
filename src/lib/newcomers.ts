@@ -1,7 +1,9 @@
 /** Newcomer capture - who has ever been minted Respect, and who is new.
  *
- * Every ZOR award goes through an OREC proposal whose calldata is
- * mintRespectGroup((uint256 id, uint64 value)[], bytes) on the ZOR contract.
+ * Every ZOR award goes through an OREC proposal whose calldata is either
+ * mintRespectGroup((uint256 id, uint64 value)[], bytes) - breakouts and batch
+ * intros - or mintRespect((uint256 id, uint64 value), bytes) - a single intro
+ * ("respectAccount"). Both target the ZOR contract.
  * The id packs the recipient wallet (see awardVerification.ts), so decoding
  * the proposal calldata gives the full recipient list with no name lookup.
  * ornode keeps every proposal, so walking its list rebuilds the whole roster.
@@ -17,20 +19,31 @@
 import { decodeFunctionData, type Hex } from 'viem';
 import { unpackAwardTokenId } from './awardVerification.js';
 
-export const MINT_RESPECT_GROUP_ABI = [
+const RESPECT_REQUEST = {
+  type: 'tuple',
+  components: [
+    { type: 'uint256', name: 'id' },
+    { type: 'uint64', name: 'value' },
+  ],
+} as const;
+
+export const MINT_RESPECT_ABI = [
+  {
+    type: 'function',
+    name: 'mintRespect',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { ...RESPECT_REQUEST, name: 'req' },
+      { type: 'bytes', name: 'data' },
+    ],
+    outputs: [],
+  },
   {
     type: 'function',
     name: 'mintRespectGroup',
     stateMutability: 'nonpayable',
     inputs: [
-      {
-        type: 'tuple[]',
-        name: 'res',
-        components: [
-          { type: 'uint256', name: 'id' },
-          { type: 'uint64', name: 'value' },
-        ],
-      },
+      { ...RESPECT_REQUEST, type: 'tuple[]', name: 'res' },
       { type: 'bytes', name: 'data' },
     ],
     outputs: [],
@@ -45,6 +58,7 @@ export interface OrnodeProposal {
   attachment?: {
     propType?: string;
     propTitle?: string;
+    mintTitle?: string;
     groupNum?: number;
     awards?: { mintTitle?: string; mintReason?: string; groupNum?: number }[];
   };
@@ -59,22 +73,25 @@ export interface AwardRecipient {
   value: number;
   meeting: number;
   mintType: number;
-  /** The award's own title, when the proposer typed one (respectAccountBatch). */
+  /** The award's own title, when the proposer typed one. */
   title: string | null;
 }
 
-/** Decode a mintRespectGroup proposal into its recipients. Returns [] for any
+/** Decode a mintRespect / mintRespectGroup proposal into its recipients. Returns [] for any
  * proposal that is not an award to the ZOR contract (ticks, custom calls). */
 export function decodeAwardRecipients(p: OrnodeProposal, zorAddress: string): AwardRecipient[] {
   if (!p.content || p.content.addr.toLowerCase() !== zorAddress.toLowerCase()) return [];
   let decoded;
   try {
-    decoded = decodeFunctionData({ abi: MINT_RESPECT_GROUP_ABI, data: p.content.cdata as Hex });
+    decoded = decodeFunctionData({ abi: MINT_RESPECT_ABI, data: p.content.cdata as Hex });
   } catch {
     return [];
   }
-  const [res] = decoded.args;
-  const titles = p.attachment?.awards ?? [];
+  const res = decoded.functionName === 'mintRespect' ? [decoded.args[0]] : decoded.args[0];
+  const titles =
+    decoded.functionName === 'mintRespect'
+      ? [{ mintTitle: p.attachment?.mintTitle }]
+      : (p.attachment?.awards ?? []);
   return res.map((r, i) => {
     const f = unpackAwardTokenId(r.id);
     return {

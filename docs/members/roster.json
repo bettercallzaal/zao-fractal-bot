@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-29T01:06:25.145Z",
+  "generatedAt": "2026-09-29T01:08:36.034Z",
   "source": "https://zao-ornode.frapps.xyz",
   "members": [
     {
@@ -920,9 +920,22 @@
       "firstProposal": "0x48247f7e9b531486f267fef735bdce0780a4fe93cc59448c58986698f38acfbe",
       "firstStatus": "Executed",
       "firstTitle": null,
+      "proposals": 2,
+      "executedRespect": 220,
+      "zorAtCapture": "220",
+      "ogAtCapture": "0"
+    },
+    {
+      "wallet": "0x4c829f0a23766d5fab9c6ab4639e78028b57ff58",
+      "label": null,
+      "firstMeeting": 112,
+      "firstSeen": "2026-08-25",
+      "firstProposal": "0xef44b3e281c395883f468e82f232a1d14fde815a3f08ee42fe7e635d06792aca",
+      "firstStatus": "Executed",
+      "firstTitle": "Intro for Unique Being for week 112",
       "proposals": 1,
       "executedRespect": 110,
-      "zorAtCapture": "220",
+      "zorAtCapture": "110",
       "ogAtCapture": "0"
     },
     {

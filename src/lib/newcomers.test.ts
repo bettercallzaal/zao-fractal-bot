@@ -21,6 +21,19 @@ const AJ_PKMN: OrnodeProposal = {
   status: 'NotExecuted',
 };
 
+// Real single-intro proposal (respectAccount -> mintRespect), executed.
+const UNIQUE_BEING: OrnodeProposal = {
+  id: '0xef44b3e281c395883f468e82f232a1d14fde815a3f08ee42fe7e635d06792aca',
+  content: {
+    addr: ZOR,
+    cdata:
+      '0xdfd469ed0000000a000000000000006f4c829f0a23766d5fab9c6ab4639e78028b57ff58000000000000000000000000000000000000000000000000000000000000006e00000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000',
+  },
+  attachment: { propType: 'respectAccount', mintTitle: 'Intro for Unique Being for week 112' },
+  createTs: 1787676263,
+  status: 'Executed',
+};
+
 const TICK: OrnodeProposal = {
   id: '0x10a1',
   content: {
@@ -38,6 +51,12 @@ describe('decodeAwardRecipients', () => {
     expect(r).toEqual([
       { wallet: '0xe34a582682691f31ea4d08c133b3692ff0ebfa24', value: 110, meeting: 117, mintType: 10, title: 'AJ intro for 117' },
       { wallet: '0x4bcee979fa5e984751f9d1dab4ecf50d134f2834', value: 110, meeting: 117, mintType: 10, title: 'PKMN intro for 117' },
+    ]);
+  });
+
+  it('decodes a single-recipient mintRespect intro', () => {
+    expect(decodeAwardRecipients(UNIQUE_BEING, ZOR)).toEqual([
+      { wallet: '0x4c829f0a23766d5fab9c6ab4639e78028b57ff58', value: 110, meeting: 112, mintType: 10, title: 'Intro for Unique Being for week 112' },
     ]);
   });
 
