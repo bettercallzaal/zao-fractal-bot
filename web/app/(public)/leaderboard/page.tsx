@@ -12,16 +12,14 @@ export default async function LeaderboardPage() {
         <thead>
           <tr>
             <th>Rank</th>
-            <th>Discord ID</th>
             <th>Wallet</th>
             <th>Respect</th>
           </tr>
         </thead>
         <tbody>
           {leaderboard.map((entry, i) => (
-            <tr key={entry.discordId}>
+            <tr key={entry.walletAddress}>
               <td>{i + 1}</td>
-              <td>{entry.discordId}</td>
               <td>{entry.walletAddress}</td>
               <td>{entry.weight}</td>
             </tr>
