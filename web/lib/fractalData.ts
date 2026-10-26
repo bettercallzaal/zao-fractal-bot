@@ -71,10 +71,17 @@ async function fetchUpcoming(): Promise<UpcomingEvent[]> {
 
 export async function getDashboardData(): Promise<DashboardData> {
   const [proposals, upcoming] = await Promise.all([
-    fetchAllProposals().then(
-      (p) => ({ ok: true as const, p }),
-      (e: unknown) => ({ ok: false as const, e: e instanceof Error ? e.message : String(e) }),
-    ),
+    fetchAllProposals()
+      .then((p) => {
+        // The record is never empty (175 proposals on 26 Oct). An empty answer
+        // is a broken read, not "no fractals": showing 0 would look real.
+        if (p.length === 0) throw new Error('ornode returned no proposals');
+        return p;
+      })
+      .then(
+        (p) => ({ ok: true as const, p }),
+        (e: unknown) => ({ ok: false as const, e: e instanceof Error ? e.message : String(e) }),
+      ),
     fetchUpcoming(),
   ]);
   return {

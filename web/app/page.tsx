@@ -59,7 +59,7 @@ export default async function HomePage() {
               </a>
             ))
           ) : (
-            <p className="event-name">Mondays at 6 PM ET. See luma.com/zao for this week.</p>
+            <p className="event-name">The Luma schedule could not be read. Fractals usually run Mondays at 6 PM ET; see luma.com/zao.</p>
           )}
           <a className="join" href={DISCORD_URL} target="_blank" rel="noreferrer">
             Join on Discord
