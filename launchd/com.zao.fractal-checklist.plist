@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.zao.fractal-checklist</string>
+  <key>ProgramArguments</key>
+  <array><string>/Users/zaalpanthaki/Documents/zao-fractal-bot/bin/zao-fractal-checklist</string></array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>18</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>/Users/zaalpanthaki/.zao/fractal-checklist.log</string>
+  <key>StandardErrorPath</key><string>/Users/zaalpanthaki/.zao/fractal-checklist.err</string>
+</dict>
+</plist>
