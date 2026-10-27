@@ -28,4 +28,9 @@ describe('fractal checklist', () => {
     const read = vi.fn(async () => { throw new Error('getStage reverted'); });
     expect(await readPassedUnexecuted([proposal('0x3333', 'Executed')], read)).toEqual([]);
   });
+
+  it('fails closed when Ornode says unexecuted but OREC stage cannot be read', async () => {
+    const read = vi.fn(async () => { throw new Error('RPC timeout'); });
+    await expect(readPassedUnexecuted([proposal('0x4444')], read)).rejects.toThrow('RPC timeout');
+  });
 });

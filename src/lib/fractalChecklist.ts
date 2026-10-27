@@ -34,14 +34,10 @@ export async function readPassedUnexecuted(
     const id = proposal.id.toLowerCase();
     const isExecuted = Boolean(proposal.executeTxHash) || proposal.status === 'Executed';
     if (isExecuted) continue;
-    let state: Awaited<ReturnType<StageReader>>;
-    try {
-      state = await readStage(proposal.id as `0x${string}`);
-    } catch {
-      // Executed OREC proposals are deleted and getStage reverts. Ornode is
-      // the corroborating execution record; unknown failures stay unknown.
-      continue;
-    }
+    // The caller checks proposalExists before getStage. A missing OREC record
+    // is therefore an explicit exclusion; any read error here is ambiguous
+    // and must stop the report rather than silently hide a passed proposal.
+    const state = await readStage(proposal.id as `0x${string}`);
     if (!state.exists || state.stage !== 'Execution') continue;
     const unsafe = [...NEVER_EXECUTE].some((bad) => id.startsWith(bad));
     out.push({
