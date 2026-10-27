@@ -6,6 +6,7 @@ import { OREC_EXECUTOR_ADDRESS, ZOR_RESPECT_ADDRESS } from '@fractalbot/shared';
 import { makeOptimismClient, OREC_ABI } from '../src/lib/governance.js';
 import { checklistMarkdown, readPassedUnexecuted } from '../src/lib/fractalChecklist.js';
 import { paginateProposals, type OrnodeProposal } from '../src/lib/newcomers.js';
+import { ensureChecklistTodos, type ChecklistTodo, type TodoBoardPort } from '../src/lib/todoCards.js';
 
 const vault = process.env.ZAO_VAULT ?? join(process.env.HOME ?? '', 'zao-vault');
 const output = process.env.FRACTAL_CHECKLIST_OUTPUT ?? join(vault, 'notes/fractal-checklist-latest.md');
@@ -60,26 +61,41 @@ async function main(): Promise<void> {
   await writeFile(output, markdown, 'utf8');
   console.log(markdown);
 
-  // Stable references make daily runs idempotent. Do not create cards for
-  // permanent NEVER EXECUTE items.
-  const due = pending.filter((p) => !p.neverExecute);
+  // Stable exact-source lookups make daily runs idempotent. Do not create
+  // cards for permanent NEVER EXECUTE items.
+  const due: ChecklistTodo[] = pending.filter((p) => !p.neverExecute).map((item) => ({
+    ref: `fractal-execute-${item.id.slice(2, 10).toLowerCase()}`,
+    title: `Execute passed Fractal proposal ${item.id.slice(0, 10)}`,
+    why: `${item.title}. OREC getStage=Execution. Review exact proposal before signing: ${item.executeUrl}`,
+    doneWhen: 'Zaal verified proposal contents and either executed it or recorded why it should remain pending.',
+    due: now.toISOString().slice(0, 10),
+  }));
   const meetingDue = withinWindow && /Action due:/.test(meetingCheck);
-  for (const item of due) {
-    const ref = `fractal-execute-${item.id.slice(2, 10).toLowerCase()}`;
-    let existing = '';
-    try { existing = execFileSync(tracker, ['search', `inbox:${ref}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); }
-    catch (error) { throw new Error(`Cannot verify duplicate todo card ${ref}; refusing write: ${String(error)}`); }
-    if (/no related tasks found/i.test(existing)) {
-      execFileSync(tracker, ['inbox', ref, `Execute passed Fractal proposal ${item.id.slice(0, 10)}`, 'owner=Zaal', `due=${now.toISOString().slice(0, 10)}`, '--why', `${item.title}. OREC getStage=Execution. Review exact proposal before signing: ${item.executeUrl}`, '--done-when', 'Zaal verified proposal contents and either executed it or recorded why it should remain pending.'], { stdio: 'inherit' });
-    }
-  }
   if (meetingDue) {
-    const ref = `fractal-closeout-${now.toISOString().slice(0, 10)}`;
-    const existing = execFileSync(tracker, ['search', `inbox:${ref}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    if (/no related tasks found/i.test(existing)) {
-      execFileSync(tracker, ['inbox', ref, 'Complete Monday Fractal proposal closeout', 'owner=Zaal', `due=${now.toISOString().slice(0, 10)}`, '--why', meetingCheck, '--done-when', 'Meeting mints and tick proposals are both confirmed on Ornode and OREC.'], { stdio: 'inherit' });
-    }
+    due.push({
+      ref: `fractal-closeout-${now.toISOString().slice(0, 10)}`,
+      title: 'Complete Monday Fractal proposal closeout',
+      why: meetingCheck,
+      doneWhen: 'Meeting mints and tick proposals are both confirmed on Ornode and OREC.',
+      due: now.toISOString().slice(0, 10),
+    });
   }
+
+  const board: TodoBoardPort = {
+    async exists(ref) {
+      const result = execFileSync(tracker, ['search', `inbox:${ref}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      if (/no related tasks found/i.test(result)) return false;
+      if (/related tasks \(\d+\):/.test(result)) return true;
+      throw new Error(`Unrecognized tracker search response for ${ref}; refusing duplicate-risk write.`);
+    },
+    async create(todo) {
+      execFileSync(tracker, [
+        'inbox', todo.ref, todo.title, 'owner=Zaal', `due=${todo.due}`,
+        '--why', todo.why, '--done-when', todo.doneWhen,
+      ], { stdio: 'inherit' });
+    },
+  };
+  await ensureChecklistTodos(due, board);
 }
 
 main().catch((error) => { console.error(`zao-fractal-checklist: ${String(error)}`); process.exitCode = 1; });
