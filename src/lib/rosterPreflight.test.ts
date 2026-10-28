@@ -35,6 +35,18 @@ describe('Fractal proposal roster preflight', () => {
     expect(calls).toBe(0);
   });
 
+  it('blocks a name that differs from the verified registry only by case', async () => {
+    const caseVariantRoster = {
+      ...roster,
+      awards: [{ ...roster.awards[0], name: 'gragragrande' }],
+    };
+    let calls = 0;
+    const result = await checkRosterPreflight(caseVariantRoster, verified, async () => { calls += 1; return 0n; });
+    expect(result.ready).toBe(false);
+    expect(result.issues.join('\n')).toContain('no exact name match');
+    expect(calls).toBe(0);
+  });
+
   it('blocks a supplied address that differs from the verified registry', async () => {
     const result = await checkRosterPreflight({
       ...roster,
@@ -47,7 +59,7 @@ describe('Fractal proposal roster preflight', () => {
   it('blocks ambiguous exact-name identities and duplicate wallets in one meeting', async () => {
     const ambiguous = await checkRosterPreflight(roster, [
       ...verified,
-      { name: 'gragragrande', wallet: '0x0000000000000000000000000000000000000002', source: 'respect_members' },
+      { name: 'Gragragrande', wallet: '0x0000000000000000000000000000000000000002', source: 'respect_members' },
     ], async () => 0n);
     expect(ambiguous.issues.join('\n')).toContain('ambiguous across multiple wallets');
 

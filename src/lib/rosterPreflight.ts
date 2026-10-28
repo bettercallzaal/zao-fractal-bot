@@ -29,10 +29,6 @@ export interface RosterPreflightResult {
 
 export type AwardBalanceReader = (wallet: `0x${string}`, tokenId: bigint) => Promise<bigint>;
 
-function normalizedName(value: string): string {
-  return value.trim().toLocaleLowerCase('en-US');
-}
-
 /** Fail closed before anyone prepares an award proposal. A verified wallet is
  * an exact-name identity in the read-only canonical registry, never a fuzzy
  * name match. Existing awards are checked at the exact meeting's packed ids
@@ -64,10 +60,10 @@ export async function checkRosterPreflight(
       continue;
     }
     const row = raw as Record<string, unknown>;
-    const name = typeof row.name === 'string' ? row.name.trim() : '';
+    const name = typeof row.name === 'string' ? row.name : '';
     const rank = row.rank;
     const room = typeof row.room === 'string' && row.room.trim() ? row.room.trim() : undefined;
-    if (!name) {
+    if (!name.trim()) {
       issues.push(`awards[${index}] has no attendee name.`);
       continue;
     }
@@ -76,7 +72,7 @@ export async function checkRosterPreflight(
       continue;
     }
 
-    const matches = verifiedRecords.filter((record) => normalizedName(record.name) === normalizedName(name));
+    const matches = verifiedRecords.filter((record) => record.name === name);
     const wallets = [...new Set(matches.map((record) => record.wallet.toLowerCase()))];
     if (wallets.length === 0) {
       issues.push(`${name}: no exact name match with a verified wallet in respect_members or users.`);
