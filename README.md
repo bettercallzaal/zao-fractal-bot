@@ -53,12 +53,12 @@ npm test                # run the test suite
 npm run dev             # start the bot (requires DISCORD_TOKEN)
 ```
 
-## Subsystems and Architecture Status (Updated 2026-09-21)
+## Subsystems and Architecture Status (Updated 2026-11-01)
 
 Following Zaal's binding architectural ruling on 2026-09-01, the bot is structured into two distinct subsystems:
 
-### Subsystem 1: Respect Game Core (LIVE)
-- **Status:** Active in production.
+### Subsystem 1: Respect Game Core (BUILT, NOT YET LIVE)
+- **Status:** Built and tested in this repo, not yet running the weekly game. The bot answering commands in the ZAO Discord is still v1, `fractalbotapril2026`. Where the cutover stands: [docs/deploy/v2-safe-deploy-plan.md](docs/deploy/v2-safe-deploy-plan.md).
 - **Components:**
   - Breakout circle seating and Fibonacci award split (`src/game/session.ts`, `seating.ts`, `split.ts`).
   - Automated roster capture and member resolution across Discord, wallet, and Farcaster (`src/game/rosterCapture.ts`).
@@ -73,4 +73,4 @@ Following Zaal's binding architectural ruling on 2026-09-01, the bot is structur
   - Hats Protocol Tree 226 on Optimism role verification and sync.
   - Team assignments, working groups, and project boards.
   - On-chain OREC proposal submission and multi-signer relayer flows.
-- **Context:** The deprecated Python bot v1 (`fractalbotapril2026`) previously coupled these features into monolithic cogs, triggering rate-limit bans and notification loops. Per Zaal's ruling ("v1 stays down. v2 takes the game. Its hats, proposals, and events cogs return later as v2 subsystems"), Subsystem 2 will be reintroduced as cleanly isolated modules only after Subsystem 1 settles in live weekly ceremonies.
+- **Context:** The Python bot v1 (`fractalbotapril2026`), still live until the v2 cutover, couples these features into monolithic cogs, triggering rate-limit bans and notification loops. Per Zaal's ruling ("v1 stays down. v2 takes the game. Its hats, proposals, and events cogs return later as v2 subsystems"), Subsystem 2 will be reintroduced as cleanly isolated modules only after Subsystem 1 settles in live weekly ceremonies. That ruling is the end state; v1 still runs until the cutover.
